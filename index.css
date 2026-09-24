@@ -1065,7 +1065,7 @@ s.ov {
     background: none;
 }
 
-/* ---- main page (Cover): one centered column - project title, the · · mark, the folders ---- */
+/* ---- main page (Cover): one centered column - the folders, then + for a new one ---- */
 .cover {
     min-height: calc(100vh - var(--pin) - 120px);
     display: flex;
@@ -1073,18 +1073,6 @@ s.ov {
     align-items: center;
     justify-content: center;
     text-align: center;
-}
-.cover-title {
-    margin: 0;
-    font-family: var(--font-mono);
-    font-weight: 400;
-    font-size: var(--fs);
-    letter-spacing: 0.04em;
-    color: var(--ink);
-} /* title face */
-.cover-mark {
-    margin: 18px 0 26px;
-    opacity: 0.5;
 }
 .cover-folders {
     display: flex;
@@ -1113,20 +1101,48 @@ s.ov {
     opacity: 0.6;
     vertical-align: 0.2em;
 }
-/* inside a folder: the way back to the main page, small, above the pieces */
-.folder-crumb {
-    display: block;
-    margin: 0 0 28px;
+.cover-add {
+    margin-top: 22px;
     background: none;
     border: 0;
-    padding: 0;
+    padding: 2px 10px;
     color: var(--dim);
-    font: inherit;
-    font-size: 9.5pt;
+    font-family: var(--font-mono);
+    font-size: var(--fs);
+    line-height: 1;
     cursor: pointer;
+    opacity: 0.6;
+    transition:
+        opacity 0.35s ease,
+        color 0.35s ease;
 }
-.folder-crumb:hover {
+.cover-add:hover,
+.cover-add:focus-visible {
+    opacity: 1;
     color: var(--ink);
+    outline: none;
+}
+.cover-new {
+    margin-top: 22px;
+}
+.cover-name {
+    width: min(260px, 70vw);
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid var(--hairline);
+    color: var(--ink);
+    font: inherit;
+    font-size: var(--fs);
+    text-align: center;
+    padding: 2px 0;
+    outline: none;
+}
+.cover-name:focus {
+    border-bottom-color: var(--dim);
+}
+.cover-name::placeholder {
+    color: var(--dim);
+    opacity: 0.5;
 }
 
 /* ---- sync: code field and join button, in the same panel style as the face list ---- */
@@ -1138,6 +1154,7 @@ s.ov {
 }
 .sync-code {
     width: 140px;
+    max-width: 100%;
     background: transparent;
     color: var(--ink);
     border: 0;

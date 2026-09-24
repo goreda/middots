@@ -30,7 +30,7 @@ const PIECES = data.pieces.map((p) => ({
     ...p,
     audio: (p.audio ?? []).map((a) => ({ src: audioUrl(a.file), label: a.label })),
 }));
-const PROJECT = data.project;
+data.project;
 const FOLDERS = data.folders;
 /* which folder a piece lives in: its own "folder", or the first folder */
 const folderOf = (p) => p.folder ?? FOLDERS[0].id;
@@ -1307,23 +1307,24 @@ function BlockText({ block, italics }) {
 const ARCHIVE_SUMMARY =
     'unarchive of the writings on the inverted dream/wake state — pieces composed live, dream and wake states trading places until the cyclical phase unfolds. twenty-three so far, newest first. some have voice excerpts. each piece ends where it ends';
 /*
- * Cover - the main page. The project title at the center, its folders under it.
- * Minimal on purpose: the layout is a centered column and nothing else yet.
+ * Cover - the main page: the folders in one centered column, and a + under them.
+ * The + turns into a name field; Enter makes a new, empty folder and opens it.
+ * Folders from pieces.json come first; folders made on the page follow (kept in the saved state).
  */
-function Cover({ onOpen }) {
+function Cover({ folders, onOpen, onCreate }) {
+    const [naming, setNaming] = reactExports.useState(false);
+    const [name, setName] = reactExports.useState('');
+    const done = () => {
+        setNaming(false);
+        setName('');
+    };
     return jsxRuntimeExports.jsxs('div', {
         className: 'cover',
         children: [
-            jsxRuntimeExports.jsx('h1', { className: 'cover-title', children: PROJECT.title }),
-            jsxRuntimeExports.jsx('p', {
-                className: 'cover-mark',
-                'aria-hidden': 'true',
-                children: '\u00B7 \u00B7',
-            }),
             jsxRuntimeExports.jsx('nav', {
                 className: 'cover-folders',
                 'aria-label': 'folders',
-                children: FOLDERS.map((f) =>
+                children: folders.map((f) =>
                     jsxRuntimeExports.jsxs(
                         'button',
                         {
@@ -1345,6 +1346,39 @@ function Cover({ onOpen }) {
                     ),
                 ),
             }),
+            naming
+                ? jsxRuntimeExports.jsx('form', {
+                      className: 'cover-new',
+                      onSubmit: (e) => {
+                          e.preventDefault();
+                          if (name.trim()) {
+                              onCreate(name.trim());
+                              done();
+                          }
+                      },
+                      children: jsxRuntimeExports.jsx('input', {
+                          className: 'cover-name',
+                          autoFocus: true,
+                          value: name,
+                          maxLength: 60,
+                          placeholder: 'name',
+                          'aria-label': 'new folder name',
+                          onChange: (e) => setName(e.target.value),
+                          onKeyDown: (e) => {
+                              if (e.key === 'Escape') done();
+                          },
+                          onBlur: () => {
+                              if (!name.trim()) done();
+                          },
+                      }),
+                  })
+                : jsxRuntimeExports.jsx('button', {
+                      type: 'button',
+                      className: 'cover-add',
+                      'aria-label': 'new folder',
+                      onClick: () => setNaming(true),
+                      children: '+',
+                  }),
         ],
     });
 }
@@ -2383,6 +2417,19 @@ function WorkStory({
         ],
     });
 }
+/*
+ * placePanel - put a pop-out panel (type shelf, sync) to the left of its button and keep it
+ * on screen: centred on the button where it fits, pushed in where it doesn't, and never wider
+ * than the room left of the button (narrow phones).
+ */
+function placePanel(list, widget) {
+    const w = widget.getBoundingClientRect();
+    list.style.maxWidth = `${Math.max(120, w.left - 10 - 8)}px`;
+    const h = list.offsetHeight;
+    const top = Math.max(12, Math.min(w.top + w.height / 2 - h / 2, window.innerHeight - h - 12));
+    list.style.top = `${top}px`;
+    list.style.right = `${window.innerWidth - w.left + 10}px`;
+}
 /* type shelf picker: click opens the whole shelf, each name set in its own face; hovering a name
    tastes it on the page, clicking keeps it, leaving puts back what was chosen */
 
@@ -2399,15 +2446,7 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUp
         const list = listRef.current;
         const widget = list?.parentElement;
         if (list && widget) {
-            // keep the whole shelf on screen: centred on its button where it fits, pushed in where it doesn't
-            const w = widget.getBoundingClientRect();
-            const h = list.offsetHeight;
-            const top = Math.max(
-                12,
-                Math.min(w.top + w.height / 2 - h / 2, window.innerHeight - h - 12),
-            );
-            list.style.top = `${top}px`;
-            list.style.right = `${window.innerWidth - w.left + 10}px`;
+            placePanel(list, widget);
             const el = list.querySelector('.face-choice.current');
             if (el) list.scrollTop = el.offsetTop - list.clientHeight / 2 + el.offsetHeight / 2;
         }
@@ -2599,6 +2638,27 @@ function SyncControl({ onJoined }) {
         }
         setNote(r.error);
     };
+    const panelRef = reactExports.useRef(null);
+    // same placement as the type shelf, redone whenever the panel's content changes size
+    reactExports.useEffect(() => {
+        const list = panelRef.current;
+        if (open && list && list.parentElement) placePanel(list, list.parentElement);
+    }, [open, note, joined, askClaim]);
+    reactExports.useEffect(() => {
+        if (!open) return;
+        const onDoc = (e) => {
+            if (!e.target.closest('.sync-widget')) setOpen(false);
+        };
+        const onKey = (e) => {
+            if (e.key === 'Escape') setOpen(false);
+        };
+        document.addEventListener('mousedown', onDoc);
+        document.addEventListener('keydown', onKey);
+        return () => {
+            document.removeEventListener('mousedown', onDoc);
+            document.removeEventListener('keydown', onKey);
+        };
+    }, [open]);
     const label = joined ? 'synced' : 'sync';
     return jsxRuntimeExports.jsxs('div', {
         className: 'face-widget sync-widget',
@@ -2606,6 +2666,7 @@ function SyncControl({ onJoined }) {
             open &&
                 jsxRuntimeExports.jsx('div', {
                     className: 'face-list sync-panel',
+                    ref: panelRef,
                     children: joined
                         ? jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
                               children: [
@@ -2699,10 +2760,18 @@ function SyncControl({ onJoined }) {
     });
 }
 /* '#/<folder>' in the address -> that folder's id; null for anything else */
-function viewFromHash() {
+function viewFromHash(own = []) {
     const m = location.hash.match(/^#\/(.+)$/);
     const id = m ? decodeURIComponent(m[1]) : '';
-    return FOLDERS.some((f) => f.id === id) ? id : null;
+    return [...FOLDERS, ...own].some((f) => f.id === id) ? id : null;
+}
+/* folders made on the page, as found in a saved state: only well-formed {id, title} entries */
+function readFolders(v) {
+    if (!Array.isArray(v)) return [];
+    return v.filter(
+        (f) =>
+            !!f && typeof f.id === 'string' && typeof f.title === 'string' && f.id.startsWith('f-'),
+    );
 }
 
 /* ---- App -----------------------------------------------------------------
@@ -2718,6 +2787,23 @@ function App() {
     /* where the reader is: the main page ('home') or a folder id. Mirrored in the address as #/<folder>,
        so a folder can be linked and the back button leaves it; saved with the rest of the state */
     const [view, setView] = reactExports.useState(() => viewFromHash() ?? 'home');
+    // folders made on the page (the + on the main page); saved and synced with the rest of the state
+    const [ownFolders, setOwnFolders] = reactExports.useState([]);
+    const allFolders = [...FOLDERS, ...ownFolders];
+    const ownFoldersRef = reactExports.useRef(ownFolders);
+    ownFoldersRef.current = ownFolders; // for the back/forward handler, registered once
+    const createFolder = (title) => {
+        const slug =
+            title
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-|-$/g, '')
+                .slice(0, 24) || 'folder';
+        const id = `f-${slug}-${Date.now().toString(36)}`;
+        setOwnFolders((fs) => [...fs, { id, title }]);
+        setView(id);
+        scrollerRef.current?.scrollTo({ top: 0 });
+    };
     const [work, setWork] = reactExports.useState(null);
     const [lh, setLh] = reactExports.useState(1.42);
     const [seamH, setSeamH] = reactExports.useState(264);
@@ -3017,10 +3103,11 @@ function App() {
             history.pushState(null, '', want || location.pathname + location.search);
     }, [view]);
     reactExports.useEffect(() => {
-        const onPop = () => setView(viewFromHash() ?? 'home');
+        const onPop = () => setView(viewFromHash(ownFoldersRef.current) ?? 'home');
         window.addEventListener('popstate', onPop);
         return () => window.removeEventListener('popstate', onPop);
     }, []);
+    const onCover = mode === 'read' && view === 'home'; // the main page: folders only
     const openView = (next) => {
         setView(next);
         scrollerRef.current?.scrollTo({ top: 0 });
@@ -3343,6 +3430,7 @@ function App() {
             mode,
             open,
             view,
+            folders: ownFolders,
             scroll: sc ? Math.round(sc.scrollTop) : 0,
         };
         storeSet(STATE_KEY, JSON.stringify(payload));
@@ -3367,10 +3455,13 @@ function App() {
             setOpen(flags);
         }
         // the page he was on, unless the address already names a folder
-        if (
-            !viewFromHash() &&
+        const own = readFolders(data.folders);
+        setOwnFolders(own);
+        const fromHash = viewFromHash(own);
+        if (fromHash) setView(fromHash);
+        else if (
             typeof data.view === 'string' &&
-            (data.view === 'home' || FOLDERS.some((f) => f.id === data.view))
+            (data.view === 'home' || [...FOLDERS, ...own].some((f) => f.id === data.view))
         )
             setView(data.view);
         // scroll position: applied after the restored pieces have laid out (two frames)
@@ -3417,6 +3508,7 @@ function App() {
         mode,
         open,
         view,
+        ownFolders,
     ]);
     // edits in progress: save after a pause in typing, and when the page goes away
     reactExports.useEffect(() => {
@@ -3521,16 +3613,14 @@ function App() {
                 className: 'page',
                 children:
                     mode === 'read' && view === 'home'
-                        ? jsxRuntimeExports.jsx(Cover, { onOpen: openView })
+                        ? jsxRuntimeExports.jsx(Cover, {
+                              folders: allFolders,
+                              onOpen: openView,
+                              onCreate: createFolder,
+                          })
                         : mode === 'read'
                           ? jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
                                 children: [
-                                    jsxRuntimeExports.jsx('button', {
-                                        type: 'button',
-                                        className: 'folder-crumb',
-                                        onClick: () => openView('home'),
-                                        children: PROJECT.title,
-                                    }),
                                     PIECES.filter((p) => folderOf(p) === view).map((p) =>
                                         jsxRuntimeExports.jsx(
                                             Story,
@@ -3542,7 +3632,7 @@ function App() {
                                             p.id,
                                         ),
                                     ),
-                                    jsxRuntimeExports.jsx(ArchiveEnd, {}),
+                                    view === FOLDERS[0].id && jsxRuntimeExports.jsx(ArchiveEnd, {}),
                                 ],
                             })
                           : (work ?? []).map((wp) =>
@@ -3567,50 +3657,78 @@ function App() {
                 className: 'controls',
                 'aria-label': 'page controls',
                 children: [
-                    jsxRuntimeExports.jsx('button', {
-                        type: 'button',
-                        className: 'draft-toggle',
-                        'aria-label': mode === 'draft' ? 'reading mode' : 'draft mode',
-                        'data-tip': mode === 'draft' ? 'reading mode' : 'draft mode',
-                        onClick: () => (mode === 'draft' ? leaveDraft() : enterDraft()),
-                        children:
-                            mode === 'draft'
-                                ? jsxRuntimeExports.jsxs('svg', {
-                                      width: '14',
-                                      height: '14',
-                                      viewBox: '0 0 14 14',
-                                      'aria-hidden': 'true',
-                                      children: [
-                                          jsxRuntimeExports.jsx('path', {
-                                              d: 'M7 3.4C5.9 2.6 4.3 2.3 2.5 2.5v8c1.8-.2 3.3.1 4.5 1 1.2-.9 2.7-1.2 4.5-1v-8c-1.8-.2-3.4.1-4.5 1z',
-                                              fill: 'none',
-                                              stroke: 'currentColor',
-                                              strokeWidth: '1.1',
-                                          }),
-                                          jsxRuntimeExports.jsx('path', {
-                                              d: 'M7 3.4v8',
-                                              stroke: 'currentColor',
-                                              strokeWidth: '1.1',
-                                          }),
-                                      ],
-                                  })
-                                : jsxRuntimeExports.jsx('svg', {
-                                      width: '14',
-                                      height: '14',
-                                      viewBox: '0 0 14 14',
-                                      'aria-hidden': 'true',
-                                      children: jsxRuntimeExports.jsx('path', {
-                                          d: 'M2.5 11.5 3.1 9 9.8 2.3a1.4 1.4 0 0 1 2 2L5 11l-2.5.5z',
-                                          fill: 'none',
-                                          stroke: 'currentColor',
-                                          strokeWidth: '1.1',
-                                      }),
-                                  }),
-                    }),
-                    jsxRuntimeExports.jsx('span', {
-                        className: 'controls-gap',
-                        'aria-hidden': 'true',
-                    }),
+                    !onCover &&
+                        jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
+                            children: [
+                                jsxRuntimeExports.jsx('button', {
+                                    type: 'button',
+                                    className: 'home-button',
+                                    'aria-label': 'home',
+                                    'data-tip': 'home',
+                                    onClick: () => {
+                                        if (mode === 'draft') leaveDraft();
+                                        openView('home');
+                                    },
+                                    children: jsxRuntimeExports.jsx('svg', {
+                                        width: '14',
+                                        height: '14',
+                                        viewBox: '0 0 14 14',
+                                        'aria-hidden': 'true',
+                                        children: jsxRuntimeExports.jsx('path', {
+                                            d: 'M2.2 6.6 7 2.5l4.8 4.1M3.6 5.6v5.9h2.5V8.6h1.8v2.9h2.5V5.6',
+                                            fill: 'none',
+                                            stroke: 'currentColor',
+                                            strokeWidth: '1.1',
+                                            strokeLinejoin: 'round',
+                                        }),
+                                    }),
+                                }),
+                                jsxRuntimeExports.jsx('button', {
+                                    type: 'button',
+                                    className: 'draft-toggle',
+                                    'aria-label': mode === 'draft' ? 'reading mode' : 'draft mode',
+                                    'data-tip': mode === 'draft' ? 'reading mode' : 'draft mode',
+                                    onClick: () => (mode === 'draft' ? leaveDraft() : enterDraft()),
+                                    children:
+                                        mode === 'draft'
+                                            ? jsxRuntimeExports.jsxs('svg', {
+                                                  width: '14',
+                                                  height: '14',
+                                                  viewBox: '0 0 14 14',
+                                                  'aria-hidden': 'true',
+                                                  children: [
+                                                      jsxRuntimeExports.jsx('path', {
+                                                          d: 'M7 3.4C5.9 2.6 4.3 2.3 2.5 2.5v8c1.8-.2 3.3.1 4.5 1 1.2-.9 2.7-1.2 4.5-1v-8c-1.8-.2-3.4.1-4.5 1z',
+                                                          fill: 'none',
+                                                          stroke: 'currentColor',
+                                                          strokeWidth: '1.1',
+                                                      }),
+                                                      jsxRuntimeExports.jsx('path', {
+                                                          d: 'M7 3.4v8',
+                                                          stroke: 'currentColor',
+                                                          strokeWidth: '1.1',
+                                                      }),
+                                                  ],
+                                              })
+                                            : jsxRuntimeExports.jsx('svg', {
+                                                  width: '14',
+                                                  height: '14',
+                                                  viewBox: '0 0 14 14',
+                                                  'aria-hidden': 'true',
+                                                  children: jsxRuntimeExports.jsx('path', {
+                                                      d: 'M2.5 11.5 3.1 9 9.8 2.3a1.4 1.4 0 0 1 2 2L5 11l-2.5.5z',
+                                                      fill: 'none',
+                                                      stroke: 'currentColor',
+                                                      strokeWidth: '1.1',
+                                                  }),
+                                              }),
+                                }),
+                                jsxRuntimeExports.jsx('span', {
+                                    className: 'controls-gap',
+                                    'aria-hidden': 'true',
+                                }),
+                            ],
+                        }),
                     mode === 'draft' &&
                         jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
                             children: [
@@ -3891,110 +4009,117 @@ function App() {
                             ],
                         }),
                     }),
-                    jsxRuntimeExports.jsx('button', {
-                        type: 'button',
-                        'aria-label': 'shorter fade',
-                        'data-tip': 'shorter fade',
-                        disabled: seamH <= 88,
-                        onClick: () => setSeamH((v) => v - 44),
-                        children: jsxRuntimeExports.jsx('svg', {
-                            width: '14',
-                            height: '14',
-                            viewBox: '0 0 14 14',
-                            'aria-hidden': 'true',
-                            children: jsxRuntimeExports.jsx('path', {
-                                d: 'M3.8 4.6 10.2 7 3.8 9.4 Z',
-                                fill: 'currentColor',
-                            }),
+                    !onCover &&
+                        jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
+                            children: [
+                                jsxRuntimeExports.jsx('button', {
+                                    type: 'button',
+                                    'aria-label': 'shorter fade',
+                                    'data-tip': 'shorter fade',
+                                    disabled: seamH <= 88,
+                                    onClick: () => setSeamH((v) => v - 44),
+                                    children: jsxRuntimeExports.jsx('svg', {
+                                        width: '14',
+                                        height: '14',
+                                        viewBox: '0 0 14 14',
+                                        'aria-hidden': 'true',
+                                        children: jsxRuntimeExports.jsx('path', {
+                                            d: 'M3.8 4.6 10.2 7 3.8 9.4 Z',
+                                            fill: 'currentColor',
+                                        }),
+                                    }),
+                                }),
+                                jsxRuntimeExports.jsx('button', {
+                                    type: 'button',
+                                    'aria-label': 'taller fade',
+                                    'data-tip': 'taller fade',
+                                    disabled: seamH >= 528,
+                                    onClick: () => setSeamH((v) => v + 44),
+                                    children: jsxRuntimeExports.jsx('svg', {
+                                        width: '14',
+                                        height: '14',
+                                        viewBox: '0 0 14 14',
+                                        'aria-hidden': 'true',
+                                        children: jsxRuntimeExports.jsx('path', {
+                                            d: 'M3 2.8 11 7 3 11.2 Z',
+                                            fill: 'currentColor',
+                                        }),
+                                    }),
+                                }),
+                                jsxRuntimeExports.jsx(FacePicker, {
+                                    slot: 'body',
+                                    uploads: uploads,
+                                    onUpload: uploadFace,
+                                    onRemove: dropFace,
+                                    value: bodyFace,
+                                    onPick: setBodyFace,
+                                    onTaste: (slug) =>
+                                        setTaste(slug ? { slot: 'body', slug } : null),
+                                    open: faceOpen === 'body',
+                                    setOpen: (o) => setFaceOpen(o ? 'body' : null),
+                                }),
+                                jsxRuntimeExports.jsx(FacePicker, {
+                                    slot: 'title',
+                                    uploads: uploads,
+                                    onUpload: uploadFace,
+                                    onRemove: dropFace,
+                                    value: titleFace,
+                                    onPick: setTitleFace,
+                                    onTaste: (slug) =>
+                                        setTaste(slug ? { slot: 'title', slug } : null),
+                                    open: faceOpen === 'title',
+                                    setOpen: (o) => setFaceOpen(o ? 'title' : null),
+                                }),
+                                jsxRuntimeExports.jsx(SizeField, {
+                                    label: 'text',
+                                    value: textPt,
+                                    range: TEXT_PT,
+                                    onSet: setTextPt,
+                                }),
+                                jsxRuntimeExports.jsx(SizeField, {
+                                    label: 'index',
+                                    value: indexPt,
+                                    range: INDEX_PT,
+                                    onSet: setIndexPt,
+                                }),
+                                jsxRuntimeExports.jsx('button', {
+                                    type: 'button',
+                                    'aria-label': 'tighter lines',
+                                    'data-tip': 'tighter lines',
+                                    disabled: lh <= 1.1,
+                                    onClick: () => setLh((v) => Math.round((v - 0.08) * 100) / 100),
+                                    children: jsxRuntimeExports.jsx('svg', {
+                                        width: '14',
+                                        height: '14',
+                                        viewBox: '0 0 14 14',
+                                        'aria-hidden': 'true',
+                                        children: jsxRuntimeExports.jsx('path', {
+                                            d: 'M3 5h8M3 7h8M3 9h8',
+                                            stroke: 'currentColor',
+                                            strokeWidth: '1.1',
+                                        }),
+                                    }),
+                                }),
+                                jsxRuntimeExports.jsx('button', {
+                                    type: 'button',
+                                    'aria-label': 'looser lines',
+                                    'data-tip': 'looser lines',
+                                    disabled: lh >= 2,
+                                    onClick: () => setLh((v) => Math.round((v + 0.08) * 100) / 100),
+                                    children: jsxRuntimeExports.jsx('svg', {
+                                        width: '14',
+                                        height: '14',
+                                        viewBox: '0 0 14 14',
+                                        'aria-hidden': 'true',
+                                        children: jsxRuntimeExports.jsx('path', {
+                                            d: 'M3 3.5h8M3 7h8M3 10.5h8',
+                                            stroke: 'currentColor',
+                                            strokeWidth: '1.1',
+                                        }),
+                                    }),
+                                }),
+                            ],
                         }),
-                    }),
-                    jsxRuntimeExports.jsx('button', {
-                        type: 'button',
-                        'aria-label': 'taller fade',
-                        'data-tip': 'taller fade',
-                        disabled: seamH >= 528,
-                        onClick: () => setSeamH((v) => v + 44),
-                        children: jsxRuntimeExports.jsx('svg', {
-                            width: '14',
-                            height: '14',
-                            viewBox: '0 0 14 14',
-                            'aria-hidden': 'true',
-                            children: jsxRuntimeExports.jsx('path', {
-                                d: 'M3 2.8 11 7 3 11.2 Z',
-                                fill: 'currentColor',
-                            }),
-                        }),
-                    }),
-                    jsxRuntimeExports.jsx(FacePicker, {
-                        slot: 'body',
-                        uploads: uploads,
-                        onUpload: uploadFace,
-                        onRemove: dropFace,
-                        value: bodyFace,
-                        onPick: setBodyFace,
-                        onTaste: (slug) => setTaste(slug ? { slot: 'body', slug } : null),
-                        open: faceOpen === 'body',
-                        setOpen: (o) => setFaceOpen(o ? 'body' : null),
-                    }),
-                    jsxRuntimeExports.jsx(FacePicker, {
-                        slot: 'title',
-                        uploads: uploads,
-                        onUpload: uploadFace,
-                        onRemove: dropFace,
-                        value: titleFace,
-                        onPick: setTitleFace,
-                        onTaste: (slug) => setTaste(slug ? { slot: 'title', slug } : null),
-                        open: faceOpen === 'title',
-                        setOpen: (o) => setFaceOpen(o ? 'title' : null),
-                    }),
-                    jsxRuntimeExports.jsx(SizeField, {
-                        label: 'text',
-                        value: textPt,
-                        range: TEXT_PT,
-                        onSet: setTextPt,
-                    }),
-                    jsxRuntimeExports.jsx(SizeField, {
-                        label: 'index',
-                        value: indexPt,
-                        range: INDEX_PT,
-                        onSet: setIndexPt,
-                    }),
-                    jsxRuntimeExports.jsx('button', {
-                        type: 'button',
-                        'aria-label': 'tighter lines',
-                        'data-tip': 'tighter lines',
-                        disabled: lh <= 1.1,
-                        onClick: () => setLh((v) => Math.round((v - 0.08) * 100) / 100),
-                        children: jsxRuntimeExports.jsx('svg', {
-                            width: '14',
-                            height: '14',
-                            viewBox: '0 0 14 14',
-                            'aria-hidden': 'true',
-                            children: jsxRuntimeExports.jsx('path', {
-                                d: 'M3 5h8M3 7h8M3 9h8',
-                                stroke: 'currentColor',
-                                strokeWidth: '1.1',
-                            }),
-                        }),
-                    }),
-                    jsxRuntimeExports.jsx('button', {
-                        type: 'button',
-                        'aria-label': 'looser lines',
-                        'data-tip': 'looser lines',
-                        disabled: lh >= 2,
-                        onClick: () => setLh((v) => Math.round((v + 0.08) * 100) / 100),
-                        children: jsxRuntimeExports.jsx('svg', {
-                            width: '14',
-                            height: '14',
-                            viewBox: '0 0 14 14',
-                            'aria-hidden': 'true',
-                            children: jsxRuntimeExports.jsx('path', {
-                                d: 'M3 3.5h8M3 7h8M3 10.5h8',
-                                stroke: 'currentColor',
-                                strokeWidth: '1.1',
-                            }),
-                        }),
-                    }),
                     jsxRuntimeExports.jsxs('button', {
                         type: 'button',
                         className: 'swatch',
