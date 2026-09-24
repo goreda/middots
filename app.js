@@ -1146,6 +1146,18 @@ async function shareLocalFonts() {
         }
     return restoreFonts();
 }
+/* forget every font this browser keeps (leaving sync resets the device); the repo faces are untouched */
+function forgetAllFonts() {
+    UPLOADED.splice(0, UPLOADED.length);
+    return new Promise((res) => {
+        try {
+            const req = indexedDB.deleteDatabase(DB);
+            req.onsuccess = req.onerror = req.onblocked = () => res();
+        } catch {
+            res();
+        }
+    });
+}
 
 /* ==========================================================================
  * App - reading page and draft bench
@@ -2644,7 +2656,7 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUp
  * SyncControl - join this device to the sync service with a code (sync.ts).
  * The first device to use a code claims it (asked once); later devices type the same code.
  */
-function SyncControl({ onJoined }) {
+function SyncControl({ onJoined, onLeft }) {
     const [open, setOpen] = reactExports.useState(false);
     const [code, setCode] = reactExports.useState('');
     const [note, setNote] = reactExports.useState('');
@@ -2708,9 +2720,15 @@ function SyncControl({ onJoined }) {
                                       type: 'button',
                                       className: 'face-choice',
                                       onClick: () => {
+                                          // leaving resets this device to a fresh page; asked once, since it can't be undone here
+                                          if (
+                                              !window.confirm(
+                                                  'leave sync? this device starts fresh: its drafts, folders, settings and fonts are cleared here. they stay safe on the code for your other devices.',
+                                              )
+                                          )
+                                              return;
                                           leave();
-                                          setJoined(false);
-                                          setNote('this device left sync');
+                                          onLeft();
                                       },
                                       children: 'leave',
                                   }),
@@ -3486,8 +3504,9 @@ function App() {
     // false until the saved state has been handed to React; nothing is written before that
     const [restored, setRestored] = reactExports.useState(false);
     const saveStateRef = reactExports.useRef(() => {});
+    const wiping = reactExports.useRef(false); // set while leaving sync resets the device: nothing may be written back
     saveStateRef.current = () => {
-        if (!restored) return;
+        if (!restored || wiping.current) return;
         const w = workRef.current;
         const sc = scrollerRef.current;
         // besides the export payload: which pieces are unfolded and where the page was scrolled to
@@ -3543,6 +3562,20 @@ function App() {
             requestAnimationFrame(() =>
                 requestAnimationFrame(() => scrollerRef.current?.scrollTo({ top })),
             );
+    };
+    /* after leaving sync: clear everything this page keeps in the browser (its own keys only - the
+       github.io origin is shared) and reload into a fresh page, as a first visit would see it */
+    const resetDevice = () => {
+        wiping.current = true;
+        try {
+            for (const k of Object.keys(localStorage))
+                if (k.startsWith('middots') || k.startsWith('wt-')) localStorage.removeItem(k);
+        } catch {
+            /* no storage */
+        }
+        void forgetAllFonts().finally(() => {
+            location.replace(location.pathname + location.search);
+        });
     };
     const applyRemote = (r) => {
         const text = JSON.stringify(r.state);
@@ -4219,7 +4252,10 @@ function App() {
                             }),
                         ],
                     }),
-                    jsxRuntimeExports.jsx(SyncControl, { onJoined: syncJoined }),
+                    jsxRuntimeExports.jsx(SyncControl, {
+                        onJoined: syncJoined,
+                        onLeft: resetDevice,
+                    }),
                 ],
             }),
             jsxRuntimeExports.jsx('input', {
