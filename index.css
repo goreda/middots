@@ -27,9 +27,11 @@
     --vt: 0px; /* top inset reserved for a host header; 0 in the mirror */
     --hz: 0px; /* the horizon's shift, set by the horizon control */
     --pin: calc(190px + var(--hz) + var(--vt));
+    /* the horizon line: the first line's baseline (top of the page + a phone's piece head + the body's ascent in its line box) */
+    --hline: calc(var(--pin) + var(--head) + (0.817 + (var(--lh) - 1) / 2) * var(--fs));
     --ctl: calc(
-        190px + var(--hz) + var(--vt)
-    ); /* the controls start on the horizon and move with it */
+        var(--hline) + 17px + 10px
+    ); /* the stack starts one gap under the horizon handle and moves with it */
 }
 :root.inverted {
     --bg: #d2d2d2;
@@ -366,14 +368,19 @@ body {
     position: fixed;
     right: 14px;
     top: var(--ctl);
+    /* one column, never wrapped: the families fold (ControlGroup), and the horizon stops where the folded
+       stack still ends above the bottom edge (HorizonControl hzMax), so no button ever leaves the page */
     display: flex;
     flex-direction: column;
-    flex-wrap: wrap-reverse; /* on a short screen the stack continues in a second column to the left, never off the bottom */
-    align-content: flex-end;
     gap: 10px;
     z-index: 10;
-    max-height: calc(100vh - var(--ctl) - 20px);
     overflow: visible; /* era menu and hover labels live left of the box */
+}
+/* the horizon handle sits on the horizon itself - the first line's baseline - on every page, above the stack */
+.controls .horizon-control {
+    position: fixed;
+    right: 14px;
+    top: calc(var(--hline) - 17px);
 }
 /* the horizon control is dragged: no scrolling or text selection under the finger */
 .controls .horizon-control {
@@ -462,7 +469,6 @@ body {
 @media (max-width: 700px) {
     :root {
         --pin: calc(120px + var(--hz) + var(--vt));
-        --ctl: calc(120px + var(--hz) + var(--vt));
         --head: calc(2 * 1.42 * var(--fs-mono) + 8px + 16px);
     }
     .page {
@@ -496,7 +502,8 @@ body {
         padding-left: 42px;
         margin-top: -6px;
     }
-    .controls {
+    .controls,
+    .controls .horizon-control {
         right: 8px;
     }
 }
@@ -642,6 +649,45 @@ span.story-title.editable:empty::before {
     width: 34px;
     height: 34px;
     flex: none;
+}
+/* a family: its button in the stack, its members in a column to the left, level with it (slid up by
+   ControlGroup where the window ends first); the column's right padding bridges the gap for a mouse */
+.ctl-group {
+    position: relative;
+    width: 34px;
+    height: 34px;
+    flex: none;
+}
+.ctl-members {
+    position: absolute;
+    right: 34px;
+    padding-right: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateX(6px);
+    transition:
+        opacity 0.25s ease,
+        transform 0.25s ease,
+        visibility 0s linear 0.25s;
+}
+.ctl-group.open .ctl-members {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: none;
+    transition:
+        opacity 0.25s ease,
+        transform 0.25s ease;
+}
+.ctl-glyph {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.02em;
+    line-height: 1;
 }
 
 /* the draft button leads the stack and turns over on hover: ink fill, background-colored icon */

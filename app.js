@@ -1909,6 +1909,69 @@ const TEXT_PT = [8, 48];
 const INDEX_PT = [6, 24];
 const clampPt = (v, [lo, hi]) => Math.round(Math.min(hi, Math.max(lo, v)) * 2) / 2;
 /* a size you type: digits in the circle, Enter or leaving sets it, arrows nudge by one */
+/* ---- a control family: one button in the stack, its members unfolded in a column beside it ----
+   Folded by default. A mouse resting on the family unfolds it (and leaving folds it after a beat, so
+   the hand can cross to the column); a tap on its button toggles it, for phones. One family is open at
+   a time. The column is vertical, always: it starts level with the family's button and, where the
+   window ends first, slides up just enough to end above the bottom edge - it never leaves the page. */
+function ControlGroup({ id, label, icon, open, setOpen, children }) {
+    const isOpen = open === id;
+    const box = reactExports.useRef(null);
+    const col = reactExports.useRef(null);
+    const leave = reactExports.useRef(undefined);
+    const [shift, setShift] = reactExports.useState(0); // how far the column slides up to stay on the page
+    React.useLayoutEffect(() => {
+        if (!isOpen || !box.current || !col.current) return;
+        const top = box.current.getBoundingClientRect().top;
+        const h = col.current.scrollHeight;
+        setShift(Math.min(0, window.innerHeight - 14 - (top + h)));
+    }, [isOpen]);
+    reactExports.useEffect(() => {
+        if (!isOpen) return;
+        // a tap anywhere outside the family folds it (phones have no leaving pointer)
+        const away = (e) => {
+            if (!box.current?.contains(e.target)) setOpen((cur) => (cur === id ? null : cur));
+        };
+        document.addEventListener('pointerdown', away);
+        return () => document.removeEventListener('pointerdown', away);
+    }, [isOpen, id, setOpen]);
+    reactExports.useEffect(() => () => window.clearTimeout(leave.current), []);
+    return jsxRuntimeExports.jsxs('div', {
+        ref: box,
+        className: `ctl-group${isOpen ? ' open' : ''}`,
+        onPointerEnter: (e) => {
+            if (e.pointerType === 'mouse') {
+                window.clearTimeout(leave.current);
+                setOpen(id);
+            }
+        },
+        onPointerLeave: (e) => {
+            if (e.pointerType === 'mouse')
+                leave.current = window.setTimeout(
+                    () => setOpen((cur) => (cur === id ? null : cur)),
+                    350,
+                );
+        },
+        children: [
+            jsxRuntimeExports.jsx('button', {
+                type: 'button',
+                className: `ctl-head${isOpen ? ' on' : ''}`,
+                'aria-label': label,
+                'aria-expanded': isOpen,
+                'data-tip': isOpen ? undefined : label,
+                onClick: () => setOpen((cur) => (cur === id ? null : id)),
+                children: icon,
+            }),
+            jsxRuntimeExports.jsx('div', {
+                ref: col,
+                className: 'ctl-members',
+                style: { top: shift },
+                'aria-hidden': !isOpen,
+                children: children,
+            }),
+        ],
+    });
+}
 /* ---- the horizon: one draggable control for where the text begins ----
    The horizon is the line a piece's first baseline sits on (the page's top padding, --pin). Dragging
    the control up or down moves it with the finger, 1:1; the controls ride along (so the handle stays
@@ -1916,7 +1979,22 @@ const clampPt = (v, [lo, hi]) => Math.round(Math.min(hi, Math.max(lo, v)) * 2) /
    so the text surfaces out of the fade the same way at any height. Arrow keys nudge it, a double-click
    (or double-tap) puts it back. Stored as a shift from the default, so it fits phone and desktop alike. */
 const HZ_RANGE = [-60, 280];
-const clampHz = (v) => Math.round(Math.min(HZ_RANGE[1], Math.max(HZ_RANGE[0], v)));
+/* the lowest the horizon may go: where the tallest folded stack (a folder in draft mode: search, home,
+   draft, five families, sync) still ends above the bottom edge. Measured from the stack's top now, less
+   the current shift, so it holds on every page, window size and frame. */
+const STACK_ROWS = 9;
+function hzMax() {
+    const el = document.querySelector('.controls');
+    if (!el) return HZ_RANGE[1];
+    const now =
+        parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--hz')) || 0;
+    const base = el.getBoundingClientRect().top - now; // the stack's top with the horizon at its default
+    return Math.max(
+        0,
+        Math.min(HZ_RANGE[1], Math.floor(window.innerHeight - 14 - (STACK_ROWS * 44 - 10) - base)),
+    );
+}
+const clampHz = (v) => Math.round(Math.min(hzMax(), Math.max(HZ_RANGE[0], v)));
 function HorizonControl({ value, onSet }) {
     const drag = reactExports.useRef(null);
     const [active, setActive] = reactExports.useState(false);
@@ -3913,6 +3991,13 @@ function App() {
     const fileRef = reactExports.useRef(null);
     const editRefs = reactExports.useRef(new Map());
     const [platen, setPlaten] = reactExports.useState(false);
+    const [ctlOpen, setCtlOpen] = reactExports.useState(null); // the one control family unfolded, if any
+    reactExports.useEffect(() => {
+        // a smaller window (rotation, resize) pulls a low horizon back up to where the stack still fits
+        const fit = () => setHz((v) => (v > hzMax() ? clampHz(v) : v));
+        window.addEventListener('resize', fit);
+        return () => window.removeEventListener('resize', fit);
+    }, []);
     const platenFollowRef = reactExports.useRef(() => {}); // the latest platenFollow, for effects declared before it
     const [focusDim, setFocusDim] = reactExports.useState(false); // focus dim: all but the paragraph being written fades
     const [bodyFace, setBodyFace] = reactExports.useState('eb-garamond');
@@ -3941,6 +4026,11 @@ function App() {
     // the horizon moves the text's first line, the controls and the fade together (--hz feeds --pin, --ctl, --seam-h in style.css)
     reactExports.useEffect(() => {
         document.documentElement.style.setProperty('--hz', `${hz}px`);
+        // a saved or dragged horizon never goes below the lowest safe line for this window
+        if (hz > 0 && hz > hzMax()) {
+            setHz(clampHz(hz));
+            return;
+        }
         // platen: the typing line holds on the horizon, so it rides the drag live
         if (platenRef.current) requestAnimationFrame(() => platenFollowRef.current());
     }, [hz]);
@@ -4975,484 +5065,713 @@ function App() {
                 'aria-label': 'page controls',
                 children: [
                     jsxRuntimeExports.jsx(SearchControl, { items: searchItems, onGo: goToHit }),
-                    !onCover &&
-                        jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
-                            children: [
-                                jsxRuntimeExports.jsx('button', {
-                                    type: 'button',
-                                    className: 'home-button',
-                                    'aria-label': 'home',
-                                    'data-tip': 'home',
-                                    onClick: () => {
-                                        if (mode === 'draft') leaveDraft();
-                                        openView('home');
-                                    },
-                                    children: jsxRuntimeExports.jsx('svg', {
-                                        width: '14',
-                                        height: '14',
-                                        viewBox: '0 0 14 14',
-                                        'aria-hidden': 'true',
-                                        children: jsxRuntimeExports.jsx('path', {
-                                            d: 'M2.2 6.6 7 2.5l4.8 4.1M3.6 5.6v5.9h2.5V8.6h1.8v2.9h2.5V5.6',
-                                            fill: 'none',
-                                            stroke: 'currentColor',
-                                            strokeWidth: '1.1',
-                                            strokeLinejoin: 'round',
-                                        }),
-                                    }),
-                                }),
-                                jsxRuntimeExports.jsx('button', {
-                                    type: 'button',
-                                    className: 'draft-toggle',
-                                    'aria-label': mode === 'draft' ? 'reading mode' : 'draft mode',
-                                    'data-tip': mode === 'draft' ? 'reading mode' : 'draft mode',
-                                    onClick: () => (mode === 'draft' ? leaveDraft() : enterDraft()),
-                                    children:
-                                        mode === 'draft'
-                                            ? jsxRuntimeExports.jsxs('svg', {
-                                                  width: '14',
-                                                  height: '14',
-                                                  viewBox: '0 0 14 14',
-                                                  'aria-hidden': 'true',
-                                                  children: [
-                                                      jsxRuntimeExports.jsx('path', {
-                                                          d: 'M7 3.4C5.9 2.6 4.3 2.3 2.5 2.5v8c1.8-.2 3.3.1 4.5 1 1.2-.9 2.7-1.2 4.5-1v-8c-1.8-.2-3.4.1-4.5 1z',
-                                                          fill: 'none',
+                    jsxRuntimeExports.jsx(HorizonControl, { value: hz, onSet: setHz }),
+                    onCover
+                        ? jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
+                              children: [
+                                  jsxRuntimeExports.jsx('button', {
+                                      type: 'button',
+                                      'aria-label': 'invert colors',
+                                      'data-tip': 'invert colors',
+                                      onClick: () => setInverted((v) => !v),
+                                      children: jsxRuntimeExports.jsxs('svg', {
+                                          width: '14',
+                                          height: '14',
+                                          viewBox: '0 0 14 14',
+                                          'aria-hidden': 'true',
+                                          children: [
+                                              jsxRuntimeExports.jsx('circle', {
+                                                  cx: '7',
+                                                  cy: '7',
+                                                  r: '6',
+                                                  fill: 'none',
+                                                  stroke: 'currentColor',
+                                                  strokeWidth: '1.2',
+                                              }),
+                                              jsxRuntimeExports.jsx('path', {
+                                                  d: 'M7 1a6 6 0 0 1 0 12z',
+                                                  fill: 'currentColor',
+                                              }),
+                                          ],
+                                      }),
+                                  }),
+                                  jsxRuntimeExports.jsxs('button', {
+                                      type: 'button',
+                                      className: 'swatch',
+                                      'aria-label': 'background color',
+                                      'data-tip': 'background',
+                                      onClick: () => colorRef.current?.click(),
+                                      children: [
+                                          jsxRuntimeExports.jsx('span', {
+                                              className: 'swatch-dot',
+                                              style: { background: bg || '#000000' },
+                                          }),
+                                          jsxRuntimeExports.jsx('input', {
+                                              type: 'color',
+                                              ref: colorRef,
+                                              value: bg || '#000000',
+                                              onChange: (e) => setBg(e.target.value),
+                                              'aria-label': 'background color',
+                                              tabIndex: -1,
+                                          }),
+                                      ],
+                                  }),
+                              ],
+                          })
+                        : jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
+                              children: [
+                                  jsxRuntimeExports.jsx('button', {
+                                      type: 'button',
+                                      className: 'home-button',
+                                      'aria-label': 'home',
+                                      'data-tip': 'home',
+                                      onClick: () => {
+                                          if (mode === 'draft') leaveDraft();
+                                          openView('home');
+                                      },
+                                      children: jsxRuntimeExports.jsx('svg', {
+                                          width: '14',
+                                          height: '14',
+                                          viewBox: '0 0 14 14',
+                                          'aria-hidden': 'true',
+                                          children: jsxRuntimeExports.jsx('path', {
+                                              d: 'M2.2 6.6 7 2.5l4.8 4.1M3.6 5.6v5.9h2.5V8.6h1.8v2.9h2.5V5.6',
+                                              fill: 'none',
+                                              stroke: 'currentColor',
+                                              strokeWidth: '1.1',
+                                              strokeLinejoin: 'round',
+                                          }),
+                                      }),
+                                  }),
+                                  jsxRuntimeExports.jsx('button', {
+                                      type: 'button',
+                                      className: 'draft-toggle',
+                                      'aria-label':
+                                          mode === 'draft' ? 'reading mode' : 'draft mode',
+                                      'data-tip': mode === 'draft' ? 'reading mode' : 'draft mode',
+                                      onClick: () =>
+                                          mode === 'draft' ? leaveDraft() : enterDraft(),
+                                      children:
+                                          mode === 'draft'
+                                              ? jsxRuntimeExports.jsxs('svg', {
+                                                    width: '14',
+                                                    height: '14',
+                                                    viewBox: '0 0 14 14',
+                                                    'aria-hidden': 'true',
+                                                    children: [
+                                                        jsxRuntimeExports.jsx('path', {
+                                                            d: 'M7 3.4C5.9 2.6 4.3 2.3 2.5 2.5v8c1.8-.2 3.3.1 4.5 1 1.2-.9 2.7-1.2 4.5-1v-8c-1.8-.2-3.4.1-4.5 1z',
+                                                            fill: 'none',
+                                                            stroke: 'currentColor',
+                                                            strokeWidth: '1.1',
+                                                        }),
+                                                        jsxRuntimeExports.jsx('path', {
+                                                            d: 'M7 3.4v8',
+                                                            stroke: 'currentColor',
+                                                            strokeWidth: '1.1',
+                                                        }),
+                                                    ],
+                                                })
+                                              : jsxRuntimeExports.jsx('svg', {
+                                                    width: '14',
+                                                    height: '14',
+                                                    viewBox: '0 0 14 14',
+                                                    'aria-hidden': 'true',
+                                                    children: jsxRuntimeExports.jsx('path', {
+                                                        d: 'M2.5 11.5 3.1 9 9.8 2.3a1.4 1.4 0 0 1 2 2L5 11l-2.5.5z',
+                                                        fill: 'none',
+                                                        stroke: 'currentColor',
+                                                        strokeWidth: '1.1',
+                                                    }),
+                                                }),
+                                  }),
+                                  mode === 'draft' &&
+                                      jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
+                                          children: [
+                                              jsxRuntimeExports.jsxs(ControlGroup, {
+                                                  id: 'write',
+                                                  label: 'writing',
+                                                  open: ctlOpen,
+                                                  setOpen: setCtlOpen,
+                                                  icon: jsxRuntimeExports.jsx('svg', {
+                                                      width: '14',
+                                                      height: '14',
+                                                      viewBox: '0 0 14 14',
+                                                      'aria-hidden': 'true',
+                                                      children: jsxRuntimeExports.jsx('path', {
+                                                          d: 'M2.5 4h9M2.5 7h9M2.5 10h5.5',
                                                           stroke: 'currentColor',
                                                           strokeWidth: '1.1',
                                                       }),
-                                                      jsxRuntimeExports.jsx('path', {
-                                                          d: 'M7 3.4v8',
-                                                          stroke: 'currentColor',
-                                                          strokeWidth: '1.1',
+                                                  }),
+                                                  children: [
+                                                      jsxRuntimeExports.jsx('button', {
+                                                          type: 'button',
+                                                          'aria-label': 'new piece',
+                                                          'data-tip': 'new piece',
+                                                          onClick: () => addDraft(),
+                                                          children: jsxRuntimeExports.jsx('svg', {
+                                                              width: '14',
+                                                              height: '14',
+                                                              viewBox: '0 0 14 14',
+                                                              'aria-hidden': 'true',
+                                                              children: jsxRuntimeExports.jsx(
+                                                                  'path',
+                                                                  {
+                                                                      d: 'M7 2.5v9M2.5 7h9',
+                                                                      stroke: 'currentColor',
+                                                                      strokeWidth: '1.2',
+                                                                  },
+                                                              ),
+                                                          }),
+                                                      }),
+                                                      jsxRuntimeExports.jsx('button', {
+                                                          type: 'button',
+                                                          className: platen ? 'on' : '',
+                                                          'aria-pressed': platen,
+                                                          'aria-label': 'platen mode',
+                                                          'data-tip': platen
+                                                              ? 'platen mode · on'
+                                                              : 'platen mode',
+                                                          onClick: () => setPlaten((v) => !v),
+                                                          children: jsxRuntimeExports.jsxs('svg', {
+                                                              width: '14',
+                                                              height: '14',
+                                                              viewBox: '0 0 14 14',
+                                                              'aria-hidden': 'true',
+                                                              children: [
+                                                                  jsxRuntimeExports.jsx('rect', {
+                                                                      x: '1.8',
+                                                                      y: '5',
+                                                                      width: '10.4',
+                                                                      height: '4',
+                                                                      rx: '2',
+                                                                      fill: 'none',
+                                                                      stroke: 'currentColor',
+                                                                      strokeWidth: '1.1',
+                                                                  }),
+                                                                  jsxRuntimeExports.jsx('path', {
+                                                                      d: 'M4 2.6h6M4 11.4h6',
+                                                                      stroke: 'currentColor',
+                                                                      strokeWidth: '1.1',
+                                                                  }),
+                                                              ],
+                                                          }),
+                                                      }),
+                                                      jsxRuntimeExports.jsx('button', {
+                                                          type: 'button',
+                                                          className: focusDim ? 'on' : '',
+                                                          'aria-pressed': focusDim,
+                                                          'aria-label': 'focus dim',
+                                                          'data-tip': focusDim
+                                                              ? 'focus dim · on'
+                                                              : 'focus dim',
+                                                          onClick: () => setFocusDim((v) => !v),
+                                                          children: jsxRuntimeExports.jsxs('svg', {
+                                                              width: '14',
+                                                              height: '14',
+                                                              viewBox: '0 0 14 14',
+                                                              'aria-hidden': 'true',
+                                                              children: [
+                                                                  jsxRuntimeExports.jsx('path', {
+                                                                      d: 'M2.5 3.4h9M2.5 10.6h9',
+                                                                      stroke: 'currentColor',
+                                                                      strokeWidth: '1.1',
+                                                                      opacity: '.35',
+                                                                  }),
+                                                                  jsxRuntimeExports.jsx('path', {
+                                                                      d: 'M2.5 7h9',
+                                                                      stroke: 'currentColor',
+                                                                      strokeWidth: '1.3',
+                                                                  }),
+                                                              ],
+                                                          }),
+                                                      }),
+                                                      jsxRuntimeExports.jsx('button', {
+                                                          type: 'button',
+                                                          className: commit ? 'on' : '',
+                                                          'aria-pressed': commit,
+                                                          'aria-label': 'commitment mode',
+                                                          'data-tip': commit
+                                                              ? 'commitment mode · on'
+                                                              : 'commitment mode',
+                                                          onClick: () => setCommit((v) => !v),
+                                                          children: jsxRuntimeExports.jsxs('svg', {
+                                                              width: '14',
+                                                              height: '14',
+                                                              viewBox: '0 0 14 14',
+                                                              'aria-hidden': 'true',
+                                                              children: [
+                                                                  jsxRuntimeExports.jsx('path', {
+                                                                      d: 'M4.6 10.8 6.4 3.2h2.2l-1.8 7.6',
+                                                                      fill: 'none',
+                                                                      stroke: 'currentColor',
+                                                                      strokeWidth: '1.1',
+                                                                  }),
+                                                                  jsxRuntimeExports.jsx('path', {
+                                                                      d: 'M2.4 7.2h9.2',
+                                                                      stroke: 'currentColor',
+                                                                      strokeWidth: '1.1',
+                                                                  }),
+                                                              ],
+                                                          }),
                                                       }),
                                                   ],
-                                              })
-                                            : jsxRuntimeExports.jsx('svg', {
+                                              }),
+                                              jsxRuntimeExports.jsxs(ControlGroup, {
+                                                  id: 'sound',
+                                                  label: 'sound',
+                                                  open: ctlOpen,
+                                                  setOpen: setCtlOpen,
+                                                  icon: jsxRuntimeExports.jsxs('svg', {
+                                                      width: '14',
+                                                      height: '14',
+                                                      viewBox: '0 0 14 14',
+                                                      'aria-hidden': 'true',
+                                                      children: [
+                                                          jsxRuntimeExports.jsx('path', {
+                                                              d: 'M2 5.5h2.5L8.5 2.5v9L4.5 8.5H2z',
+                                                              fill: 'none',
+                                                              stroke: 'currentColor',
+                                                              strokeWidth: '1.1',
+                                                              strokeLinejoin: 'round',
+                                                          }),
+                                                          jsxRuntimeExports.jsx('path', {
+                                                              d: 'M10.3 4.8a3.1 3.1 0 0 1 0 4.4',
+                                                              fill: 'none',
+                                                              stroke: 'currentColor',
+                                                              strokeWidth: '1.1',
+                                                          }),
+                                                      ],
+                                                  }),
+                                                  children: [
+                                                      jsxRuntimeExports.jsxs('div', {
+                                                          className: 'era-widget',
+                                                          children: [
+                                                              jsxRuntimeExports.jsxs('div', {
+                                                                  className: 'era-menu',
+                                                                  children: [
+                                                                      jsxRuntimeExports.jsx(
+                                                                          'button',
+                                                                          {
+                                                                              type: 'button',
+                                                                              className:
+                                                                                  eraId === 'random'
+                                                                                      ? 'era-choice current'
+                                                                                      : 'era-choice',
+                                                                              'data-tip':
+                                                                                  'a random era each keystroke',
+                                                                              'aria-label':
+                                                                                  'a random era each keystroke',
+                                                                              onClick: () =>
+                                                                                  setEraId(
+                                                                                      'random',
+                                                                                  ),
+                                                                              children: '?',
+                                                                          },
+                                                                      ),
+                                                                      ERAS.map((e) =>
+                                                                          jsxRuntimeExports.jsx(
+                                                                              'button',
+                                                                              {
+                                                                                  type: 'button',
+                                                                                  className:
+                                                                                      eraId === e.id
+                                                                                          ? 'era-choice current'
+                                                                                          : 'era-choice',
+                                                                                  'data-tip':
+                                                                                      ERA_TIPS[
+                                                                                          e.id
+                                                                                      ],
+                                                                                  'aria-label':
+                                                                                      ERA_TIPS[
+                                                                                          e.id
+                                                                                      ],
+                                                                                  onClick: () =>
+                                                                                      setEraId(
+                                                                                          e.id,
+                                                                                      ),
+                                                                                  children: e.label,
+                                                                              },
+                                                                              e.id,
+                                                                          ),
+                                                                      ),
+                                                                  ],
+                                                              }),
+                                                              jsxRuntimeExports.jsx('button', {
+                                                                  type: 'button',
+                                                                  className: 'era-icon',
+                                                                  'aria-label': 'typing era',
+                                                                  onClick: () => {
+                                                                      const ids = [
+                                                                          ...ERAS.map((e) => e.id),
+                                                                          'random',
+                                                                      ];
+                                                                      setEraId(
+                                                                          ids[
+                                                                              (ids.indexOf(eraId) +
+                                                                                  1) %
+                                                                                  ids.length
+                                                                          ],
+                                                                      );
+                                                                  },
+                                                                  children: jsxRuntimeExports.jsxs(
+                                                                      'svg',
+                                                                      {
+                                                                          width: '14',
+                                                                          height: '14',
+                                                                          viewBox: '0 0 14 14',
+                                                                          'aria-hidden': 'true',
+                                                                          children: [
+                                                                              jsxRuntimeExports.jsx(
+                                                                                  'path',
+                                                                                  {
+                                                                                      d: 'M4.2 5.6V3h5.6v2.6',
+                                                                                      fill: 'none',
+                                                                                      stroke: 'currentColor',
+                                                                                      strokeWidth:
+                                                                                          '1.1',
+                                                                                  },
+                                                                              ),
+                                                                              jsxRuntimeExports.jsx(
+                                                                                  'rect',
+                                                                                  {
+                                                                                      x: '2.2',
+                                                                                      y: '5.6',
+                                                                                      width: '9.6',
+                                                                                      height: '5.6',
+                                                                                      rx: '1.2',
+                                                                                      fill: 'none',
+                                                                                      stroke: 'currentColor',
+                                                                                      strokeWidth:
+                                                                                          '1.1',
+                                                                                  },
+                                                                              ),
+                                                                              jsxRuntimeExports.jsx(
+                                                                                  'path',
+                                                                                  {
+                                                                                      d: 'M4.8 8.2h4.4',
+                                                                                      stroke: 'currentColor',
+                                                                                      strokeWidth:
+                                                                                          '1.1',
+                                                                                  },
+                                                                              ),
+                                                                          ],
+                                                                      },
+                                                                  ),
+                                                              }),
+                                                          ],
+                                                      }),
+                                                      jsxRuntimeExports.jsx('button', {
+                                                          type: 'button',
+                                                          'aria-label': soundOn
+                                                              ? 'sound off'
+                                                              : 'sound on',
+                                                          'data-tip': soundOn
+                                                              ? 'sound off'
+                                                              : 'sound on',
+                                                          onClick: () => setSoundOn((v) => !v),
+                                                          children: soundOn
+                                                              ? jsxRuntimeExports.jsxs('svg', {
+                                                                    width: '14',
+                                                                    height: '14',
+                                                                    viewBox: '0 0 14 14',
+                                                                    'aria-hidden': 'true',
+                                                                    children: [
+                                                                        jsxRuntimeExports.jsx(
+                                                                            'path',
+                                                                            {
+                                                                                d: 'M2 5.5h2.5L8.5 2.5v9L4.5 8.5H2z',
+                                                                                fill: 'currentColor',
+                                                                            },
+                                                                        ),
+                                                                        jsxRuntimeExports.jsx(
+                                                                            'path',
+                                                                            {
+                                                                                d: 'M10.3 4.8a3.1 3.1 0 0 1 0 4.4',
+                                                                                fill: 'none',
+                                                                                stroke: 'currentColor',
+                                                                                strokeWidth: '1.1',
+                                                                            },
+                                                                        ),
+                                                                    ],
+                                                                })
+                                                              : jsxRuntimeExports.jsxs('svg', {
+                                                                    width: '14',
+                                                                    height: '14',
+                                                                    viewBox: '0 0 14 14',
+                                                                    'aria-hidden': 'true',
+                                                                    children: [
+                                                                        jsxRuntimeExports.jsx(
+                                                                            'path',
+                                                                            {
+                                                                                d: 'M2 5.5h2.5L8.5 2.5v9L4.5 8.5H2z',
+                                                                                fill: 'currentColor',
+                                                                            },
+                                                                        ),
+                                                                        jsxRuntimeExports.jsx(
+                                                                            'path',
+                                                                            {
+                                                                                d: 'M10 4.8l3.4 4.4M13.4 4.8 10 9.2',
+                                                                                stroke: 'currentColor',
+                                                                                strokeWidth: '1.1',
+                                                                            },
+                                                                        ),
+                                                                    ],
+                                                                }),
+                                                      }),
+                                                  ],
+                                              }),
+                                          ],
+                                      }),
+                                  jsxRuntimeExports.jsxs(ControlGroup, {
+                                      id: 'faces',
+                                      label: 'typefaces',
+                                      open: ctlOpen,
+                                      setOpen: setCtlOpen,
+                                      icon: jsxRuntimeExports.jsx('span', {
+                                          className: 'ctl-glyph',
+                                          'aria-hidden': 'true',
+                                          children: 'Aa',
+                                      }),
+                                      children: [
+                                          jsxRuntimeExports.jsx(FacePicker, {
+                                              slot: 'body',
+                                              uploads: uploads,
+                                              onUpload: uploadFace,
+                                              onRemove: dropFace,
+                                              value: bodyFace,
+                                              onPick: setBodyFace,
+                                              onTaste: (slug) =>
+                                                  setTaste(slug ? { slot: 'body', slug } : null),
+                                              open: faceOpen === 'body',
+                                              setOpen: (o) => setFaceOpen(o ? 'body' : null),
+                                          }),
+                                          jsxRuntimeExports.jsx(FacePicker, {
+                                              slot: 'title',
+                                              uploads: uploads,
+                                              onUpload: uploadFace,
+                                              onRemove: dropFace,
+                                              value: titleFace,
+                                              onPick: setTitleFace,
+                                              onTaste: (slug) =>
+                                                  setTaste(slug ? { slot: 'title', slug } : null),
+                                              open: faceOpen === 'title',
+                                              setOpen: (o) => setFaceOpen(o ? 'title' : null),
+                                          }),
+                                      ],
+                                  }),
+                                  jsxRuntimeExports.jsxs(ControlGroup, {
+                                      id: 'sizes',
+                                      label: 'sizes',
+                                      open: ctlOpen,
+                                      setOpen: setCtlOpen,
+                                      icon: jsxRuntimeExports.jsx('svg', {
+                                          width: '14',
+                                          height: '14',
+                                          viewBox: '0 0 14 14',
+                                          'aria-hidden': 'true',
+                                          children: jsxRuntimeExports.jsx('path', {
+                                              d: 'M2.5 10.5 5 3.5l2.5 7M3.4 8h3.2M9 10.5l1.6-4.5 1.6 4.5',
+                                              fill: 'none',
+                                              stroke: 'currentColor',
+                                              strokeWidth: '1.05',
+                                              strokeLinejoin: 'round',
+                                          }),
+                                      }),
+                                      children: [
+                                          jsxRuntimeExports.jsx(SizeField, {
+                                              label: 'text',
+                                              value: textPt,
+                                              range: TEXT_PT,
+                                              onSet: setTextPt,
+                                          }),
+                                          jsxRuntimeExports.jsx(SizeField, {
+                                              label: 'index',
+                                              value: indexPt,
+                                              range: INDEX_PT,
+                                              onSet: setIndexPt,
+                                          }),
+                                          jsxRuntimeExports.jsx('button', {
+                                              type: 'button',
+                                              'aria-label': 'tighter lines',
+                                              'data-tip': 'tighter lines',
+                                              disabled: lh <= 1.1,
+                                              onClick: () =>
+                                                  setLh((v) => Math.round((v - 0.08) * 100) / 100),
+                                              children: jsxRuntimeExports.jsx('svg', {
                                                   width: '14',
                                                   height: '14',
                                                   viewBox: '0 0 14 14',
                                                   'aria-hidden': 'true',
                                                   children: jsxRuntimeExports.jsx('path', {
-                                                      d: 'M2.5 11.5 3.1 9 9.8 2.3a1.4 1.4 0 0 1 2 2L5 11l-2.5.5z',
-                                                      fill: 'none',
+                                                      d: 'M3 5h8M3 7h8M3 9h8',
                                                       stroke: 'currentColor',
                                                       strokeWidth: '1.1',
                                                   }),
                                               }),
-                                }),
-                                jsxRuntimeExports.jsx('span', {
-                                    className: 'controls-gap',
-                                    'aria-hidden': 'true',
-                                }),
-                            ],
-                        }),
-                    mode === 'draft' &&
-                        jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
-                            children: [
-                                jsxRuntimeExports.jsx('button', {
-                                    type: 'button',
-                                    'aria-label': 'new piece',
-                                    'data-tip': 'new piece',
-                                    onClick: () => addDraft(),
-                                    children: jsxRuntimeExports.jsx('svg', {
-                                        width: '14',
-                                        height: '14',
-                                        viewBox: '0 0 14 14',
-                                        'aria-hidden': 'true',
-                                        children: jsxRuntimeExports.jsx('path', {
-                                            d: 'M7 2.5v9M2.5 7h9',
-                                            stroke: 'currentColor',
-                                            strokeWidth: '1.2',
-                                        }),
-                                    }),
-                                }),
-                                jsxRuntimeExports.jsx('button', {
-                                    type: 'button',
-                                    className: platen ? 'on' : '',
-                                    'aria-pressed': platen,
-                                    'aria-label': 'platen mode',
-                                    'data-tip': platen ? 'platen mode · on' : 'platen mode',
-                                    onClick: () => setPlaten((v) => !v),
-                                    children: jsxRuntimeExports.jsxs('svg', {
-                                        width: '14',
-                                        height: '14',
-                                        viewBox: '0 0 14 14',
-                                        'aria-hidden': 'true',
-                                        children: [
-                                            jsxRuntimeExports.jsx('rect', {
-                                                x: '1.8',
-                                                y: '5',
-                                                width: '10.4',
-                                                height: '4',
-                                                rx: '2',
-                                                fill: 'none',
-                                                stroke: 'currentColor',
-                                                strokeWidth: '1.1',
-                                            }),
-                                            jsxRuntimeExports.jsx('path', {
-                                                d: 'M4 2.6h6M4 11.4h6',
-                                                stroke: 'currentColor',
-                                                strokeWidth: '1.1',
-                                            }),
-                                        ],
-                                    }),
-                                }),
-                                jsxRuntimeExports.jsx('button', {
-                                    type: 'button',
-                                    className: focusDim ? 'on' : '',
-                                    'aria-pressed': focusDim,
-                                    'aria-label': 'focus dim',
-                                    'data-tip': focusDim ? 'focus dim · on' : 'focus dim',
-                                    onClick: () => setFocusDim((v) => !v),
-                                    children: jsxRuntimeExports.jsxs('svg', {
-                                        width: '14',
-                                        height: '14',
-                                        viewBox: '0 0 14 14',
-                                        'aria-hidden': 'true',
-                                        children: [
-                                            jsxRuntimeExports.jsx('path', {
-                                                d: 'M2.5 3.4h9M2.5 10.6h9',
-                                                stroke: 'currentColor',
-                                                strokeWidth: '1.1',
-                                                opacity: '.35',
-                                            }),
-                                            jsxRuntimeExports.jsx('path', {
-                                                d: 'M2.5 7h9',
-                                                stroke: 'currentColor',
-                                                strokeWidth: '1.3',
-                                            }),
-                                        ],
-                                    }),
-                                }),
-                                jsxRuntimeExports.jsx('button', {
-                                    type: 'button',
-                                    className: commit ? 'on' : '',
-                                    'aria-pressed': commit,
-                                    'aria-label': 'commitment mode',
-                                    'data-tip': commit ? 'commitment mode · on' : 'commitment mode',
-                                    onClick: () => setCommit((v) => !v),
-                                    children: jsxRuntimeExports.jsxs('svg', {
-                                        width: '14',
-                                        height: '14',
-                                        viewBox: '0 0 14 14',
-                                        'aria-hidden': 'true',
-                                        children: [
-                                            jsxRuntimeExports.jsx('path', {
-                                                d: 'M4.6 10.8 6.4 3.2h2.2l-1.8 7.6',
-                                                fill: 'none',
-                                                stroke: 'currentColor',
-                                                strokeWidth: '1.1',
-                                            }),
-                                            jsxRuntimeExports.jsx('path', {
-                                                d: 'M2.4 7.2h9.2',
-                                                stroke: 'currentColor',
-                                                strokeWidth: '1.1',
-                                            }),
-                                        ],
-                                    }),
-                                }),
-                                jsxRuntimeExports.jsxs('div', {
-                                    className: 'era-widget',
-                                    children: [
-                                        jsxRuntimeExports.jsxs('div', {
-                                            className: 'era-menu',
-                                            children: [
-                                                jsxRuntimeExports.jsx('button', {
-                                                    type: 'button',
-                                                    className:
-                                                        eraId === 'random'
-                                                            ? 'era-choice current'
-                                                            : 'era-choice',
-                                                    'data-tip': 'a random era each keystroke',
-                                                    'aria-label': 'a random era each keystroke',
-                                                    onClick: () => setEraId('random'),
-                                                    children: '?',
-                                                }),
-                                                ERAS.map((e) =>
-                                                    jsxRuntimeExports.jsx(
-                                                        'button',
-                                                        {
-                                                            type: 'button',
-                                                            className:
-                                                                eraId === e.id
-                                                                    ? 'era-choice current'
-                                                                    : 'era-choice',
-                                                            'data-tip': ERA_TIPS[e.id],
-                                                            'aria-label': ERA_TIPS[e.id],
-                                                            onClick: () => setEraId(e.id),
-                                                            children: e.label,
-                                                        },
-                                                        e.id,
-                                                    ),
-                                                ),
-                                            ],
-                                        }),
-                                        jsxRuntimeExports.jsx('button', {
-                                            type: 'button',
-                                            className: 'era-icon',
-                                            'aria-label': 'typing era',
-                                            onClick: () => {
-                                                const ids = [...ERAS.map((e) => e.id), 'random'];
-                                                setEraId(
-                                                    ids[(ids.indexOf(eraId) + 1) % ids.length],
-                                                );
-                                            },
-                                            children: jsxRuntimeExports.jsxs('svg', {
-                                                width: '14',
-                                                height: '14',
-                                                viewBox: '0 0 14 14',
-                                                'aria-hidden': 'true',
-                                                children: [
-                                                    jsxRuntimeExports.jsx('path', {
-                                                        d: 'M4.2 5.6V3h5.6v2.6',
-                                                        fill: 'none',
-                                                        stroke: 'currentColor',
-                                                        strokeWidth: '1.1',
-                                                    }),
-                                                    jsxRuntimeExports.jsx('rect', {
-                                                        x: '2.2',
-                                                        y: '5.6',
-                                                        width: '9.6',
-                                                        height: '5.6',
-                                                        rx: '1.2',
-                                                        fill: 'none',
-                                                        stroke: 'currentColor',
-                                                        strokeWidth: '1.1',
-                                                    }),
-                                                    jsxRuntimeExports.jsx('path', {
-                                                        d: 'M4.8 8.2h4.4',
-                                                        stroke: 'currentColor',
-                                                        strokeWidth: '1.1',
-                                                    }),
-                                                ],
-                                            }),
-                                        }),
-                                    ],
-                                }),
-                                jsxRuntimeExports.jsx('button', {
-                                    type: 'button',
-                                    'aria-label': soundOn ? 'sound off' : 'sound on',
-                                    'data-tip': soundOn ? 'sound off' : 'sound on',
-                                    onClick: () => setSoundOn((v) => !v),
-                                    children: soundOn
-                                        ? jsxRuntimeExports.jsxs('svg', {
-                                              width: '14',
-                                              height: '14',
-                                              viewBox: '0 0 14 14',
-                                              'aria-hidden': 'true',
-                                              children: [
-                                                  jsxRuntimeExports.jsx('path', {
-                                                      d: 'M2 5.5h2.5L8.5 2.5v9L4.5 8.5H2z',
-                                                      fill: 'currentColor',
-                                                  }),
-                                                  jsxRuntimeExports.jsx('path', {
-                                                      d: 'M10.3 4.8a3.1 3.1 0 0 1 0 4.4',
-                                                      fill: 'none',
+                                          }),
+                                          jsxRuntimeExports.jsx('button', {
+                                              type: 'button',
+                                              'aria-label': 'looser lines',
+                                              'data-tip': 'looser lines',
+                                              disabled: lh >= 2,
+                                              onClick: () =>
+                                                  setLh((v) => Math.round((v + 0.08) * 100) / 100),
+                                              children: jsxRuntimeExports.jsx('svg', {
+                                                  width: '14',
+                                                  height: '14',
+                                                  viewBox: '0 0 14 14',
+                                                  'aria-hidden': 'true',
+                                                  children: jsxRuntimeExports.jsx('path', {
+                                                      d: 'M3 3.5h8M3 7h8M3 10.5h8',
                                                       stroke: 'currentColor',
                                                       strokeWidth: '1.1',
                                                   }),
-                                              ],
-                                          })
-                                        : jsxRuntimeExports.jsxs('svg', {
-                                              width: '14',
-                                              height: '14',
-                                              viewBox: '0 0 14 14',
-                                              'aria-hidden': 'true',
+                                              }),
+                                          }),
+                                      ],
+                                  }),
+                                  jsxRuntimeExports.jsxs(ControlGroup, {
+                                      id: 'page',
+                                      label: 'page',
+                                      open: ctlOpen,
+                                      setOpen: setCtlOpen,
+                                      icon: jsxRuntimeExports.jsxs('svg', {
+                                          width: '14',
+                                          height: '14',
+                                          viewBox: '0 0 14 14',
+                                          'aria-hidden': 'true',
+                                          children: [
+                                              jsxRuntimeExports.jsx('rect', {
+                                                  x: '3',
+                                                  y: '2',
+                                                  width: '8',
+                                                  height: '10',
+                                                  rx: '1',
+                                                  fill: 'none',
+                                                  stroke: 'currentColor',
+                                                  strokeWidth: '1.1',
+                                              }),
+                                              jsxRuntimeExports.jsx('path', {
+                                                  d: 'M5 5h4M5 7.2h4',
+                                                  stroke: 'currentColor',
+                                                  strokeWidth: '1',
+                                                  opacity: '.6',
+                                              }),
+                                          ],
+                                      }),
+                                      children: [
+                                          jsxRuntimeExports.jsx('button', {
+                                              type: 'button',
+                                              'aria-label': 'invert colors',
+                                              'data-tip': 'invert colors',
+                                              onClick: () => setInverted((v) => !v),
+                                              children: jsxRuntimeExports.jsxs('svg', {
+                                                  width: '14',
+                                                  height: '14',
+                                                  viewBox: '0 0 14 14',
+                                                  'aria-hidden': 'true',
+                                                  children: [
+                                                      jsxRuntimeExports.jsx('circle', {
+                                                          cx: '7',
+                                                          cy: '7',
+                                                          r: '6',
+                                                          fill: 'none',
+                                                          stroke: 'currentColor',
+                                                          strokeWidth: '1.2',
+                                                      }),
+                                                      jsxRuntimeExports.jsx('path', {
+                                                          d: 'M7 1a6 6 0 0 1 0 12z',
+                                                          fill: 'currentColor',
+                                                      }),
+                                                  ],
+                                              }),
+                                          }),
+                                          jsxRuntimeExports.jsxs('button', {
+                                              type: 'button',
+                                              className: 'swatch',
+                                              'aria-label': 'background color',
+                                              'data-tip': 'background',
+                                              onClick: () => colorRef.current?.click(),
                                               children: [
-                                                  jsxRuntimeExports.jsx('path', {
-                                                      d: 'M2 5.5h2.5L8.5 2.5v9L4.5 8.5H2z',
-                                                      fill: 'currentColor',
+                                                  jsxRuntimeExports.jsx('span', {
+                                                      className: 'swatch-dot',
+                                                      style: { background: bg || '#000000' },
                                                   }),
-                                                  jsxRuntimeExports.jsx('path', {
-                                                      d: 'M10 4.8l3.4 4.4M13.4 4.8 10 9.2',
-                                                      stroke: 'currentColor',
-                                                      strokeWidth: '1.1',
+                                                  jsxRuntimeExports.jsx('input', {
+                                                      type: 'color',
+                                                      ref: colorRef,
+                                                      value: bg || '#000000',
+                                                      onChange: (e) => setBg(e.target.value),
+                                                      'aria-label': 'background color',
+                                                      tabIndex: -1,
                                                   }),
                                               ],
                                           }),
-                                }),
-                                jsxRuntimeExports.jsx('button', {
-                                    type: 'button',
-                                    'aria-label': 'export drafts',
-                                    'data-tip': 'export drafts',
-                                    onClick: doExport,
-                                    children: jsxRuntimeExports.jsxs('svg', {
-                                        width: '14',
-                                        height: '14',
-                                        viewBox: '0 0 14 14',
-                                        'aria-hidden': 'true',
-                                        children: [
-                                            jsxRuntimeExports.jsx('path', {
-                                                d: 'M7 2v7M4 6.3 7 9.3 10 6.3',
-                                                fill: 'none',
-                                                stroke: 'currentColor',
-                                                strokeWidth: '1.2',
-                                            }),
-                                            jsxRuntimeExports.jsx('path', {
-                                                d: 'M2.5 11.5h9',
-                                                stroke: 'currentColor',
-                                                strokeWidth: '1.2',
-                                            }),
-                                        ],
-                                    }),
-                                }),
-                                jsxRuntimeExports.jsx('button', {
-                                    type: 'button',
-                                    'aria-label': 'import drafts',
-                                    'data-tip': 'import drafts',
-                                    onClick: () => setOverlay({ kind: 'import', text: '' }),
-                                    children: jsxRuntimeExports.jsxs('svg', {
-                                        width: '14',
-                                        height: '14',
-                                        viewBox: '0 0 14 14',
-                                        'aria-hidden': 'true',
-                                        children: [
-                                            jsxRuntimeExports.jsx('path', {
-                                                d: 'M7 9.3v-7M4 5 7 2l3 3',
-                                                fill: 'none',
-                                                stroke: 'currentColor',
-                                                strokeWidth: '1.2',
-                                            }),
-                                            jsxRuntimeExports.jsx('path', {
-                                                d: 'M2.5 11.5h9',
-                                                stroke: 'currentColor',
-                                                strokeWidth: '1.2',
-                                            }),
-                                        ],
-                                    }),
-                                }),
-                                jsxRuntimeExports.jsx('span', {
-                                    className: 'controls-gap',
-                                    'aria-hidden': 'true',
-                                }),
-                            ],
-                        }),
-                    jsxRuntimeExports.jsx(HorizonControl, { value: hz, onSet: setHz }),
-                    jsxRuntimeExports.jsx('button', {
-                        type: 'button',
-                        'aria-label': 'invert colors',
-                        'data-tip': 'invert colors',
-                        onClick: () => setInverted((v) => !v),
-                        children: jsxRuntimeExports.jsxs('svg', {
-                            width: '14',
-                            height: '14',
-                            viewBox: '0 0 14 14',
-                            'aria-hidden': 'true',
-                            children: [
-                                jsxRuntimeExports.jsx('circle', {
-                                    cx: '7',
-                                    cy: '7',
-                                    r: '6',
-                                    fill: 'none',
-                                    stroke: 'currentColor',
-                                    strokeWidth: '1.2',
-                                }),
-                                jsxRuntimeExports.jsx('path', {
-                                    d: 'M7 1a6 6 0 0 1 0 12z',
-                                    fill: 'currentColor',
-                                }),
-                            ],
-                        }),
-                    }),
-                    !onCover &&
-                        jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
-                            children: [
-                                jsxRuntimeExports.jsx(FacePicker, {
-                                    slot: 'body',
-                                    uploads: uploads,
-                                    onUpload: uploadFace,
-                                    onRemove: dropFace,
-                                    value: bodyFace,
-                                    onPick: setBodyFace,
-                                    onTaste: (slug) =>
-                                        setTaste(slug ? { slot: 'body', slug } : null),
-                                    open: faceOpen === 'body',
-                                    setOpen: (o) => setFaceOpen(o ? 'body' : null),
-                                }),
-                                jsxRuntimeExports.jsx(FacePicker, {
-                                    slot: 'title',
-                                    uploads: uploads,
-                                    onUpload: uploadFace,
-                                    onRemove: dropFace,
-                                    value: titleFace,
-                                    onPick: setTitleFace,
-                                    onTaste: (slug) =>
-                                        setTaste(slug ? { slot: 'title', slug } : null),
-                                    open: faceOpen === 'title',
-                                    setOpen: (o) => setFaceOpen(o ? 'title' : null),
-                                }),
-                                jsxRuntimeExports.jsx(SizeField, {
-                                    label: 'text',
-                                    value: textPt,
-                                    range: TEXT_PT,
-                                    onSet: setTextPt,
-                                }),
-                                jsxRuntimeExports.jsx(SizeField, {
-                                    label: 'index',
-                                    value: indexPt,
-                                    range: INDEX_PT,
-                                    onSet: setIndexPt,
-                                }),
-                                jsxRuntimeExports.jsx('button', {
-                                    type: 'button',
-                                    'aria-label': 'tighter lines',
-                                    'data-tip': 'tighter lines',
-                                    disabled: lh <= 1.1,
-                                    onClick: () => setLh((v) => Math.round((v - 0.08) * 100) / 100),
-                                    children: jsxRuntimeExports.jsx('svg', {
-                                        width: '14',
-                                        height: '14',
-                                        viewBox: '0 0 14 14',
-                                        'aria-hidden': 'true',
-                                        children: jsxRuntimeExports.jsx('path', {
-                                            d: 'M3 5h8M3 7h8M3 9h8',
-                                            stroke: 'currentColor',
-                                            strokeWidth: '1.1',
-                                        }),
-                                    }),
-                                }),
-                                jsxRuntimeExports.jsx('button', {
-                                    type: 'button',
-                                    'aria-label': 'looser lines',
-                                    'data-tip': 'looser lines',
-                                    disabled: lh >= 2,
-                                    onClick: () => setLh((v) => Math.round((v + 0.08) * 100) / 100),
-                                    children: jsxRuntimeExports.jsx('svg', {
-                                        width: '14',
-                                        height: '14',
-                                        viewBox: '0 0 14 14',
-                                        'aria-hidden': 'true',
-                                        children: jsxRuntimeExports.jsx('path', {
-                                            d: 'M3 3.5h8M3 7h8M3 10.5h8',
-                                            stroke: 'currentColor',
-                                            strokeWidth: '1.1',
-                                        }),
-                                    }),
-                                }),
-                            ],
-                        }),
-                    jsxRuntimeExports.jsxs('button', {
-                        type: 'button',
-                        className: 'swatch',
-                        'aria-label': 'background color',
-                        'data-tip': 'background',
-                        onClick: () => colorRef.current?.click(),
-                        children: [
-                            jsxRuntimeExports.jsx('span', {
-                                className: 'swatch-dot',
-                                style: { background: bg || '#000000' },
-                            }),
-                            jsxRuntimeExports.jsx('input', {
-                                type: 'color',
-                                ref: colorRef,
-                                value: bg || '#000000',
-                                onChange: (e) => setBg(e.target.value),
-                                'aria-label': 'background color',
-                                tabIndex: -1,
-                            }),
-                        ],
-                    }),
+                                          mode === 'draft' &&
+                                              jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
+                                                  children: [
+                                                      jsxRuntimeExports.jsx('button', {
+                                                          type: 'button',
+                                                          'aria-label': 'export drafts',
+                                                          'data-tip': 'export drafts',
+                                                          onClick: doExport,
+                                                          children: jsxRuntimeExports.jsxs('svg', {
+                                                              width: '14',
+                                                              height: '14',
+                                                              viewBox: '0 0 14 14',
+                                                              'aria-hidden': 'true',
+                                                              children: [
+                                                                  jsxRuntimeExports.jsx('path', {
+                                                                      d: 'M7 2v7M4 6.3 7 9.3 10 6.3',
+                                                                      fill: 'none',
+                                                                      stroke: 'currentColor',
+                                                                      strokeWidth: '1.2',
+                                                                  }),
+                                                                  jsxRuntimeExports.jsx('path', {
+                                                                      d: 'M2.5 11.5h9',
+                                                                      stroke: 'currentColor',
+                                                                      strokeWidth: '1.2',
+                                                                  }),
+                                                              ],
+                                                          }),
+                                                      }),
+                                                      jsxRuntimeExports.jsx('button', {
+                                                          type: 'button',
+                                                          'aria-label': 'import drafts',
+                                                          'data-tip': 'import drafts',
+                                                          onClick: () =>
+                                                              setOverlay({
+                                                                  kind: 'import',
+                                                                  text: '',
+                                                              }),
+                                                          children: jsxRuntimeExports.jsxs('svg', {
+                                                              width: '14',
+                                                              height: '14',
+                                                              viewBox: '0 0 14 14',
+                                                              'aria-hidden': 'true',
+                                                              children: [
+                                                                  jsxRuntimeExports.jsx('path', {
+                                                                      d: 'M7 9.3v-7M4 5 7 2l3 3',
+                                                                      fill: 'none',
+                                                                      stroke: 'currentColor',
+                                                                      strokeWidth: '1.2',
+                                                                  }),
+                                                                  jsxRuntimeExports.jsx('path', {
+                                                                      d: 'M2.5 11.5h9',
+                                                                      stroke: 'currentColor',
+                                                                      strokeWidth: '1.2',
+                                                                  }),
+                                                              ],
+                                                          }),
+                                                      }),
+                                                  ],
+                                              }),
+                                      ],
+                                  }),
+                              ],
+                          }),
                     jsxRuntimeExports.jsx(SyncControl, {
                         onJoined: syncJoined,
                         onLeft: resetDevice,
