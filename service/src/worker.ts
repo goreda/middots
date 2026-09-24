@@ -4,7 +4,7 @@
  * device that knows the same code sees the same thing.
  *
  * Codes, first come first served
- *   There are no accounts. A code (4 to 64 characters of any kind, chosen by the reader)
+ *   There are no accounts. A code (exactly 4 characters of any kind, chosen by the reader)
  *   is the key to one bucket. The first device to use a code that nobody has used
  *   claims it: a new bucket is made and bound to it. Any later device that types the
  *   same code joins that bucket. The page asks before claiming, so a typo does not
@@ -154,8 +154,8 @@ async function forCode(env: Env, code: string) {
 /* ---- join: claim a new code or join an existing one, with guessing limits ---- */
 interface Lock { tries: number; until: number; strikes: number }
 // any typable sign: letters, digits, symbols, spaces, any script or emoji; only control characters are out.
-// Length counts characters (code points), 4 to 64.
-const CODE_OK = (c: unknown): c is string => typeof c === 'string' && !/[\u0000-\u001f\u007f]/.test(c) && Array.from(c).length >= 4 && Array.from(c).length <= 64;
+// Length counts characters (code points): exactly 4.
+const CODE_OK = (c: unknown): c is string => typeof c === 'string' && !/[\u0000-\u001f\u007f]/.test(c) && Array.from(c).length === 4;
 
 async function join(env: Env, req: Request, h: Record<string, string>) {
     const ip = req.headers.get('CF-Connecting-IP') ?? 'unknown';
@@ -166,7 +166,7 @@ async function join(env: Env, req: Request, h: Record<string, string>) {
     if (wait > 0) return json({ error: 'locked', retryInSeconds: Math.ceil(wait / 1000) }, 429, h);
 
     const { code, claim } = (await req.json().catch(() => ({}))) as { code?: string; claim?: boolean };
-    if (!CODE_OK(code)) return json({ error: 'a code is 4 to 64 characters' }, 400, h);
+    if (!CODE_OK(code)) return json({ error: 'a code is exactly 4 characters' }, 400, h);
 
     // every attempt from this address counts; 10 per window, then a wait that doubles
     mine.tries++;
@@ -303,7 +303,7 @@ async function entries(env: Env, bucket: string) {
 
 async function rekey(env: Env, d: Device, req: Request, step: string, h: Record<string, string>) {
     const { code, i } = (await req.json().catch(() => ({}))) as { code?: string; i?: number };
-    if (!CODE_OK(code)) return json({ error: 'a code is 4 to 64 characters' }, 400, h);
+    if (!CODE_OK(code)) return json({ error: 'a code is exactly 4 characters' }, 400, h);
     const next = await forCode(env, code);
     if (next.bucket === d.bucket) return json({ error: 'that is already the code' }, 400, h);
     const names = await entries(env, d.bucket);

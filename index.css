@@ -1131,6 +1131,10 @@ s.ov {
     vertical-align: -0.18em;
     background: var(--dim);
 }
+.logo-sel {
+    background: var(--hairline);
+    color: var(--ink);
+}
 .logo-caret.rest {
     animation: pin-caret 1.06s steps(1) infinite;
 }

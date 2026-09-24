@@ -1415,119 +1415,207 @@ function NameField({ initial, onDone }) {
         onBlur: () => finish(!!initial),
     });
 }
-/* ---- the logo: "middots", typed by a hand that hesitates ----
-   A behavioral logo on the main page's horizon, left side, in the side-title style. It is a small
-   script played in a loop: type the word, sometimes miss a key (a neighbour on the keyboard) or swap
-   two letters, notice a beat later, erase, retype; rest with a blinking caret; then have a second
-   thought - erase part or all of the word - and type again. Every interval is drawn fresh around a
-   human rhythm (quick runs inside the word, a breath before "dots", slower after a correction), so
-   the loop never repeats exactly and never ticks like a metronome. Reduced motion: the word, still. */
+/* ---- the logo: "middots", a small life typed by a hand that hesitates ----
+   A behavioral logo on the main page's horizon, left side, in the side-title style. It lives in a loop
+   of lives: born from an empty line, typed with slips (a neighbouring key, two letters swapped) that it
+   notices a beat later and corrects; it rests with a blinking caret; then it dies, all of it, and the
+   empty line starts over. Every life dies differently - a death is drawn from a repertoire (steady
+   backspaces, a held key that runs, a wait and a skip, select-all and gone, word by word, a selection
+   growing back from the end, erased from the front, eroded from within like a cellular automaton,
+   a second thought that puts a letter back first, a plain cut) and never the same way twice in a row.
+   Every interval is drawn fresh around a human rhythm, so no two lives match and nothing ticks like a
+   metronome. The whole thing is data: a life is a list of frames, a frame is what the line shows.
+   Reduced motion: the word, still. */
 const LOGO = 'middots';
 const NEAR = { m: 'nj', i: 'uok', d: 'sfe', o: 'ipl', t: 'ryg', s: 'adw' };
-const pick = (s) => s[Math.floor(Math.random() * s.length)];
+const GAP = '\u00a0'; // an eroded cell: the letter is gone, its place stays until the line collapses
+const pick = (xs) => xs[Math.floor(Math.random() * xs.length)];
+const chance = (p) => Math.random() < p;
 /* a pause around m ms with human spread: skewed right (log-normal), so most keys are quick and a few linger */
 const human = (m) =>
     Math.round(m * Math.exp((Math.random() + Math.random() + Math.random() - 1.5) * 0.55));
-function logoTake(from) {
-    var _a;
+/* birth: type the word from an empty line, slipping and correcting on the way */
+function logoBirth() {
     const out = [];
+    let text = '';
     let flow = 1; // slows after a slip, eases back as the hand trusts itself again
-    for (let i = from.length; i < LOGO.length; i++) {
+    const key = (t, wait) => {
+        text = t;
+        out.push({ text, caret: text.length, wait });
+    };
+    for (let i = 0; i < LOGO.length; i++) {
         const c = LOGO[i];
         const beat = (i === 3 ? 380 : 120) * flow; // "mid" | "dots": a breath at the seam
-        const r = Math.random();
-        if (r < 0.1 && NEAR[c]) {
+        if (chance(0.1) && NEAR[c]) {
             // a slip: a neighbouring key, maybe one more right letter, then notice, erase, retype
-            const run = Math.random() < 0.5 && i + 1 < LOGO.length ? 1 : 0;
-            out.push({ ch: pick(NEAR[c]), wait: human(beat) });
-            for (let k = 1; k <= run; k++) out.push({ ch: LOGO[i + k], wait: human(110) });
+            const run = chance(0.5) && i + 1 < LOGO.length ? 1 : 0;
+            key(text + pick(NEAR[c]), human(beat));
+            if (run) key(text + LOGO[i + 1], human(110));
             out[out.length - 1].wait += human(420); // the beat of noticing
-            for (let k = 0; k <= run; k++) out.push({ back: true, wait: human(75) });
-            out[out.length - 1].wait += human(140);
+            for (let k = 0; k <= run; k++)
+                key(text.slice(0, -1), human(75) + (k === run ? human(140) : 0));
             flow = 1.6;
-        } else if (r < 0.14 && i + 1 < LOGO.length && LOGO[i + 1] !== c) {
+        } else if (chance(0.05) && i + 1 < LOGO.length && LOGO[i + 1] !== c) {
             // a swap: two letters in the wrong order
-            out.push(
-                { ch: LOGO[i + 1], wait: human(beat) },
-                { ch: c, wait: human(90) + human(460) },
-            );
-            out.push({ back: true, wait: human(75) }, { back: true, wait: human(75) + human(160) });
+            key(text + LOGO[i + 1], human(beat));
+            key(text + c, human(90) + human(460));
+            key(text.slice(0, -1), human(75));
+            key(text.slice(0, -1), human(75) + human(160));
             flow = 1.6;
-        } else {
-            out.push({ ch: c, wait: 0 });
-            flow = Math.max(1, flow * 0.8);
-        }
-        if (out[out.length - 1].back) {
-            out.push({ ch: c, wait: 0 });
-        }
-        (_a = out[out.length - 1]).wait ||
-            (_a.wait = human(i === LOGO.length - 1 ? 200 : 115 * flow));
+        } else flow = Math.max(1, flow * 0.8);
+        key(text + c, human(i === LOGO.length - 1 ? 200 : 115 * flow));
     }
     return out;
 }
-/* the second thought after a rest: how much of the word to take back */
-function logoDoubt() {
-    const r = Math.random();
-    return r < 0.45
-        ? 4 /* take back "dots", keep "mid" */
-        : r < 0.75
-          ? LOGO.length /* all of it */
-          : r < 0.9
-            ? 1
-            : 2;
-}
+/* deaths: each takes the full word to an empty line, its own way */
+const back = (t, n = 1) => ({ text: t.slice(0, t.length - n), caret: t.length - n });
+const DEATHS = {
+    // one key at a time, evenly-ish
+    steady: () =>
+        Array.from({ length: LOGO.length }, (_, k) => ({ ...back(LOGO, k + 1), wait: human(85) })),
+    // a held backspace: one, the repeat delay, then the run
+    held: () =>
+        Array.from({ length: LOGO.length }, (_, k) => ({
+            ...back(LOGO, k + 1),
+            wait: k === 0 ? human(430) : 30 + Math.round(Math.random() * 8),
+        })),
+    // a wait and a skip: a few keys, a stop mid-word, then a jump over the rest
+    waitskip: () => {
+        const out = [];
+        let t = LOGO;
+        while (t) {
+            const n =
+                t.length > 2 && chance(0.35) ? 2 + Math.floor(Math.random() * (t.length - 1)) : 1;
+            const b = back(t, Math.min(n, t.length));
+            t = b.text;
+            out.push({ ...b, wait: chance(0.3) ? human(900) : human(110) });
+        }
+        return out;
+    },
+    // select all, look at it, gone in an instant
+    selectall: () => [
+        { text: LOGO, caret: LOGO.length, sel: [0, LOGO.length], wait: human(650) },
+        { text: '', caret: 0, wait: human(200) },
+    ],
+    // word by word: "dots", a breath, "mid"
+    words: () => [
+        { ...back(LOGO, 4), wait: human(600) },
+        { text: '', caret: 0, wait: human(200) },
+    ],
+    // shift-select growing back from the end, then one delete
+    growsel: () => [
+        ...Array.from({ length: LOGO.length }, (_, k) => ({
+            text: LOGO,
+            caret: LOGO.length,
+            sel: [LOGO.length - k - 1, LOGO.length],
+            wait: human(k === LOGO.length - 1 ? 420 : 70),
+        })),
+        { text: '', caret: 0, wait: human(200) },
+    ],
+    // the caret goes home, then forward-delete from the front
+    front: () => [
+        { text: LOGO, caret: 0, wait: human(500) },
+        ...Array.from({ length: LOGO.length }, (_, k) => ({
+            text: LOGO.slice(k + 1),
+            caret: 0,
+            wait: human(90),
+        })),
+    ],
+    // erosion, a cellular automaton: one cell dies, then each generation a living cell dies with odds
+    // rising with its dead neighbours (the edges count as dead); the holes spread until the line collapses
+    erode: () => {
+        const cells = [...LOGO].map((c) => ({ c, alive: true }));
+        cells[Math.floor(Math.random() * cells.length)].alive = false;
+        const show = () => ({
+            text: cells.map((x) => (x.alive ? x.c : GAP)).join(''),
+            caret: LOGO.length,
+        });
+        const out = [{ ...show(), wait: human(260) }];
+        while (cells.some((x) => x.alive)) {
+            const dead = cells.map((x) => !x.alive);
+            cells.forEach((x, i) => {
+                const n =
+                    Number(i === 0 || dead[i - 1]) + Number(i === cells.length - 1 || dead[i + 1]);
+                if (x.alive && Math.random() < [0.08, 0.45, 0.8][n]) x.alive = false;
+            });
+            out.push({ ...show(), wait: human(170) });
+        }
+        out.push({ text: '', caret: 0, wait: human(200) });
+        return out;
+    },
+    // a second thought: three keys back, one letter put back, a pause, then all of it
+    doubt: () => [
+        ...[1, 2, 3].map((n) => ({ ...back(LOGO, n), wait: human(95) })),
+        { ...back(LOGO, 2), wait: human(700) },
+        ...[3, 4, 5, 6, 7].map((n) => ({ ...back(LOGO, n), wait: human(55) })),
+    ],
+    // a plain cut: no warning, the line is empty
+    cut: () => [{ text: '', caret: 0, wait: human(200) }],
+};
 function Logo() {
-    const [text, setText] = reactExports.useState(() =>
-        matchMedia('(prefers-reduced-motion: reduce)').matches ? LOGO : '',
-    );
-    const [typing, setTyping] = reactExports.useState(false); // the caret holds solid while keys fall, blinks at rest
+    const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const [line, setLine] = reactExports.useState({
+        text: still ? LOGO : '',
+        caret: still ? LOGO.length : 0,
+    });
+    const [busy, setBusy] = reactExports.useState(false); // the caret holds solid while keys fall, blinks at rest
     reactExports.useEffect(() => {
-        if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        if (still) return;
         let t;
-        let cur = '';
-        const play = (strokes, then) => {
+        let last = '';
+        const play = (frames, then) => {
+            setBusy(true);
             const step = (k) => {
-                if (k >= strokes.length) return then();
-                const s = strokes[k];
-                cur = s.back ? cur.slice(0, -1) : cur + s.ch;
-                setText(cur);
-                t = window.setTimeout(() => step(k + 1), s.wait);
+                if (k >= frames.length) return then();
+                const { wait, ...shown } = frames[k];
+                setLine(shown);
+                t = window.setTimeout(() => step(k + 1), wait);
             };
-            setTyping(true);
             step(0);
         };
-        const cycle = () =>
-            play(logoTake(cur), () => {
-                // at rest: the whole word, a blinking caret, for a long while
-                setTyping(false);
+        const life = () =>
+            play(logoBirth(), () => {
+                setBusy(false); // at rest: the whole word and a blinking caret, for a while
                 t = window.setTimeout(
                     () => {
-                        const n = logoDoubt();
-                        const erase = Array.from({ length: n }, (_, k) => ({
-                            back: true,
-                            wait: human(k === n - 1 ? 520 : 70),
-                        }));
-                        play(erase, cycle);
+                        const death = pick(Object.keys(DEATHS).filter((d) => d !== last)); // never the same death twice running
+                        last = death;
+                        play(DEATHS[death](), () => {
+                            setBusy(false);
+                            t = window.setTimeout(life, human(1100));
+                        });
                     },
-                    9000 + Math.random() * 9000,
+                    7000 + Math.random() * 8000,
                 );
             });
-        t = window.setTimeout(cycle, 700);
+        t = window.setTimeout(life, 700);
         return () => window.clearTimeout(t);
-    }, []);
+    }, [still]);
+    const { text, caret, sel } = line;
+    const caretEl = jsxRuntimeExports.jsx('span', {
+        className: busy ? 'logo-caret' : 'logo-caret rest',
+    });
     return jsxRuntimeExports.jsx('div', {
         className: 'logo',
         'aria-label': LOGO,
         role: 'img',
-        children: jsxRuntimeExports.jsxs('span', {
+        children: jsxRuntimeExports.jsx('span', {
             className: 'logo-word',
             'aria-hidden': 'true',
-            children: [
-                text,
-                jsxRuntimeExports.jsx('span', {
-                    className: typing ? 'logo-caret' : 'logo-caret rest',
-                }),
-            ],
+            children: sel
+                ? jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
+                      children: [
+                          text.slice(0, sel[0]),
+                          jsxRuntimeExports.jsx('span', {
+                              className: 'logo-sel',
+                              children: text.slice(sel[0], sel[1]),
+                          }),
+                          text.slice(sel[1]),
+                      ],
+                  })
+                : jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
+                      children: [text.slice(0, caret), caretEl, text.slice(caret)],
+                  }),
         }),
     });
 }
@@ -3243,9 +3331,9 @@ function SearchControl({ items, onGo }) {
 /* the code field: one small box per character ----
    A real (invisible) input lies over the boxes, so typing, pasting, the phone keyboard and password
    managers all work as usual; the boxes only draw it. Each character shows for a moment, then turns
-   into a middot. Any typable sign counts - letters, digits, symbols, spaces; a code is 4 to 64 of them. */
+   into a middot. Any typable sign counts - letters, digits, symbols, spaces; a code is exactly 4 of them: four boxes, never a fifth. */
 const PIN_MIN = 4;
-const PIN_MAX = 64;
+const PIN_MAX = 4;
 function PinField({ value, onChange, onEnter, label, shake }) {
     const [focused, setFocused] = reactExports.useState(false);
     const [shown, setShown] = reactExports.useState(-1); // index of the character still visible, or -1
@@ -3265,7 +3353,7 @@ function PinField({ value, onChange, onEnter, label, shake }) {
         const t = window.setTimeout(() => setShown(-1), 260);
         return () => window.clearTimeout(t);
     }, [shown, value]);
-    // the boxes: every typed character, plus the next empty one, never fewer than four
+    // the boxes: always four, filled as typed
     const chars = Array.from(value); // by character, so an emoji or accented sign fills one box
     const boxes = Math.min(PIN_MAX, Math.max(PIN_MIN, chars.length + 1));
     const active = Math.min(chars.length, PIN_MAX - 1);
@@ -3360,7 +3448,7 @@ function SyncControl({ onJoined, onLeft, onRekeyed }) {
     };
     const go = async (claim) => {
         if (Array.from(code).length < PIN_MIN) {
-            nope('at least 4');
+            nope('four signs');
             return;
         }
         setNote('\u2026');
@@ -3383,7 +3471,7 @@ function SyncControl({ onJoined, onLeft, onRekeyed }) {
     };
     const next = async () => {
         if (Array.from(code).length < PIN_MIN) {
-            nope('at least 4');
+            nope('four signs');
             return;
         }
         if (mode === 'new') {
