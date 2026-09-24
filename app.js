@@ -789,7 +789,146 @@ function loadFace(face, withItalic = true) {
         () => undefined,
     );
 }
-const faceBySlug = (slug) => FACES.find((f) => f.slug === slug);
+/* faces the reader uploaded in this browser, newest first (filled by uploads.ts) */
+const UPLOADED = [];
+const faceBySlug = (slug) =>
+    FACES.find((f) => f.slug === slug) ?? UPLOADED.find((f) => f.slug === slug);
+
+/*
+ * sharing - the seam for fonts that follow the owner across devices.
+ *
+ * Today uploaded fonts live only in the browser they were uploaded in
+ * (uploads.ts, IndexedDB). Nothing is sent anywhere, nothing goes into the repo.
+ * A future sync service plugs in here: implement FontShare and hand it to
+ * uploads.ts in place of LocalOnly. The picker and the browser store stay as
+ * they are; shared fonts would join the same first shelf.
+ */
+/* the current setup: no shared store, every font stays in its browser */
+const LocalOnly = {
+    canRead: () => false,
+    list: async () => [],
+    fontUrl: () => '',
+};
+
+/*
+ * uploads - fonts the owner brings in, shown on the first shelf of both font lists.
+ *
+ * An uploaded font lives in this browser's IndexedDB, next to the saved drafts
+ * and settings: usable at once, back after every reload, until removed. It is
+ * never sent anywhere, never put in the repo and never given a URL - the bytes
+ * go straight to the browser's font engine (FontFace) - so visitors to the site
+ * cannot fetch it. (Nothing stops the owner's own browser from reading it back;
+ * that is the limit of any font a page can draw.)
+ * Cross-device fonts are left to a future sync service (sharing.ts); a font
+ * that is both local and shared would be listed once.
+ * Where storage is blocked (the archive File's sandboxed viewer) an upload lasts
+ * for the visit only. Draft exports carry only the face's name, never the font.
+ */
+const DB = 'middots-fonts';
+const STORE = 'fonts';
+function openDb() {
+    return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB, 1);
+        req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: 'slug' });
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+async function withStore(mode, run) {
+    const db = await openDb();
+    return new Promise((resolve, reject) => {
+        const req = run(db.transaction(STORE, mode).objectStore(STORE));
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+}
+/* a stable slug from the file name, so the same font uploaded on two devices is one entry */
+function slugFor(fileName) {
+    const ext = (fileName.match(/\.(woff2?|ttf|otf)$/i)?.[1] ?? 'ttf').toLowerCase();
+    const name =
+        fileName
+            .replace(/\.(woff2?|ttf|otf)$/i, '')
+            .replace(/[-_]+/g, ' ')
+            .trim() || 'uploaded font';
+    const base =
+        name
+            .toLowerCase()
+            .normalize('NFKD')
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-|-$/g, '') || 'font';
+    return { slug: `upload-${base}`, name, file: `${base}.${ext}` };
+}
+/* hand a font to the font engine and put it on the first shelf; throws when it is not a usable font */
+async function register(slug, name, source, shared) {
+    const ff = new FontFace(
+        slug,
+        typeof source === 'string' ? `url(${JSON.stringify(source)})` : source,
+    );
+    await ff.load();
+    document.fonts.add(ff);
+    const face = {
+        slug,
+        name,
+        family: `'${slug}', Georgia, serif`,
+        kind: 'serif',
+        uploaded: true,
+        shared,
+    };
+    const at = UPLOADED.findIndex((f) => f.slug === slug);
+    if (at >= 0) UPLOADED.splice(at, 1, face);
+    else UPLOADED.unshift(face);
+    return face;
+}
+/* on load: this browser's fonts first, then any shared font this browser lacks */
+async function restoreFonts() {
+    let local = [];
+    try {
+        local = await withStore('readonly', (s) => s.getAll());
+    } catch {
+        /* no storage */
+    }
+    let shared = [];
+    const sharedSlugs = new Set(shared.map((f) => f.slug));
+    for (const f of local) {
+        try {
+            await register(f.slug, f.name, f.data, sharedSlugs.has(f.slug));
+        } catch {
+            /* damaged */
+        }
+    }
+    const localSlugs = new Set(local.map((f) => f.slug));
+    for (const f of shared.slice().reverse()) {
+        if (localSlugs.has(f.slug)) continue;
+        try {
+            await register(f.slug, f.name, LocalOnly.fontUrl(f), true);
+        } catch {
+            /* not published yet */
+        }
+    }
+    return [...UPLOADED];
+}
+/* a file from the picker: check it is a font, show it, and keep it in this browser */
+async function addFontFile(file) {
+    const id = slugFor(file.name);
+    const data = await file.arrayBuffer();
+    const face = await register(id.slug, id.name, data.slice(0), false);
+    try {
+        await withStore('readwrite', (s) => s.put({ ...id, data }));
+    } catch {
+        /* storage blocked: this visit only */
+    }
+    return face;
+}
+/* remove from this browser; a font in the repo stays listed there (it comes back as a repo face) */
+async function removeFont(slug) {
+    try {
+        await withStore('readwrite', (s) => s.delete(slug));
+    } catch {
+        /* nothing kept */
+    }
+    const i = UPLOADED.findIndex((f) => f.slug === slug);
+    if (i >= 0 && !UPLOADED[i].shared) UPLOADED.splice(i, 1);
+}
 
 /*
  * host - what the page is allowed to do where it runs.
@@ -2004,8 +2143,11 @@ function WorkStory({
 /* ---- type shelf picker ---------------------------------------------------
  * Opens the full shelf beside its button; hover previews, click keeps.
  */
-function FacePicker({ slot, value, onPick, onTaste, open, setOpen }) {
+function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUpload, onRemove }) {
     const listRef = reactExports.useRef(null);
+    const uploadRef = reactExports.useRef(null);
+    const [uploadNote, setUploadNote] = reactExports.useState('');
+    const defaultNote = 'saved in this browser only';
     reactExports.useEffect(() => {
         if (!open) return;
         FACES.forEach((f) => void loadFace(f, false));
@@ -2049,31 +2191,92 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen }) {
         className: `face-widget ${slot}${open ? ' open' : ''}`,
         children: [
             open &&
-                jsxRuntimeExports.jsx('div', {
+                jsxRuntimeExports.jsxs('div', {
                     className: 'face-list',
                     ref: listRef,
                     onMouseLeave: () => onTaste(null),
-                    children: FACES.map((f) => {
-                        const gap = lastKind !== '' && f.kind !== lastKind;
-                        lastKind = f.kind;
-                        return jsxRuntimeExports.jsx(
-                            'button',
-                            {
-                                type: 'button',
-                                className: `face-choice${f.slug === value ? ' current' : ''}${gap ? ' wing' : ''}`,
-                                style: { fontFamily: f.family },
-                                onMouseEnter: () => onTaste(f.slug),
-                                onFocus: () => onTaste(f.slug),
-                                onClick: () => {
-                                    onPick(f.slug);
-                                    onTaste(null);
-                                    setOpen(false);
-                                },
-                                children: f.name,
+                    children: [
+                        jsxRuntimeExports.jsx('button', {
+                            type: 'button',
+                            className: 'face-choice face-upload',
+                            onClick: () => uploadRef.current?.click(),
+                            children: 'upload a font',
+                        }),
+                        jsxRuntimeExports.jsx('input', {
+                            ref: uploadRef,
+                            type: 'file',
+                            accept: '.woff2,.woff,.ttf,.otf,font/woff2,font/woff,font/ttf,font/otf',
+                            style: { display: 'none' },
+                            onChange: (e) => {
+                                const file = e.target.files?.[0];
+                                e.target.value = '';
+                                if (!file) return;
+                                setUploadNote('');
+                                onUpload(file).catch(() =>
+                                    setUploadNote(
+                                        'that file isn\u2019t a font this browser can read',
+                                    ),
+                                );
                             },
-                            f.slug,
-                        );
-                    }),
+                        }),
+                        jsxRuntimeExports.jsx('p', {
+                            className: 'face-upload-note',
+                            children: uploadNote || defaultNote,
+                        }),
+                        uploads.map((f) =>
+                            jsxRuntimeExports.jsxs(
+                                'span',
+                                {
+                                    className: 'face-own',
+                                    children: [
+                                        jsxRuntimeExports.jsx('button', {
+                                            type: 'button',
+                                            className: `face-choice${f.slug === value ? ' current' : ''}`,
+                                            style: { fontFamily: f.family },
+                                            onMouseEnter: () => onTaste(f.slug),
+                                            onFocus: () => onTaste(f.slug),
+                                            onClick: () => {
+                                                onPick(f.slug);
+                                                onTaste(null);
+                                                setOpen(false);
+                                            },
+                                            children: f.name,
+                                        }),
+                                        !f.shared &&
+                                            jsxRuntimeExports.jsx('button', {
+                                                type: 'button',
+                                                className: 'face-remove',
+                                                'aria-label': `remove ${f.name}`,
+                                                onClick: () => onRemove(f.slug),
+                                                children: '\u00D7',
+                                            }),
+                                    ],
+                                },
+                                f.slug,
+                            ),
+                        ),
+                        FACES.map((f, i) => {
+                            const gap = (lastKind !== '' && f.kind !== lastKind) || i === 0;
+                            lastKind = f.kind;
+                            return jsxRuntimeExports.jsx(
+                                'button',
+                                {
+                                    type: 'button',
+                                    className: `face-choice${f.slug === value ? ' current' : ''}${gap ? ' wing' : ''}`,
+                                    style: { fontFamily: f.family },
+                                    onMouseEnter: () => onTaste(f.slug),
+                                    onFocus: () => onTaste(f.slug),
+                                    onClick: () => {
+                                        onPick(f.slug);
+                                        onTaste(null);
+                                        setOpen(false);
+                                    },
+                                    children: f.name,
+                                },
+                                f.slug,
+                            );
+                        }),
+                    ],
                 }),
             jsxRuntimeExports.jsx('button', {
                 type: 'button',
@@ -2151,6 +2354,7 @@ function App() {
     const [taste, setTaste] = reactExports.useState(null);
     const [faceOpen, setFaceOpen] = reactExports.useState(null);
     const [commit, setCommit] = reactExports.useState(false);
+    const [uploads, setUploads] = reactExports.useState([]);
     const soundPref = reactExports.useRef({ on: true, era: ERAS[2].id, commit: false });
     const platenRef = reactExports.useRef(false);
     platenRef.current = platen && mode === 'draft';
@@ -2192,7 +2396,7 @@ function App() {
         };
         apply('body', taste?.slot === 'body' ? taste.slug : bodyFace);
         apply('title', taste?.slot === 'title' ? taste.slug : titleFace);
-    }, [bodyFace, titleFace, taste]);
+    }, [bodyFace, titleFace, taste, uploads]); // uploads: a restored own font arrives after the first paint
     // ghost controls: any deliberate activity wakes them, idle hides them
     reactExports.useEffect(() => {
         let timer;
@@ -2399,6 +2603,20 @@ function App() {
             if (naturalY < pinY - 1) sc.scrollTop -= pinY - naturalY;
         }
         setOpen((prev) => ({ ...prev, [id]: !prev[id] }));
+    };
+    /* the owner's fonts (uploads.ts): restored on load from this browser and the repo.
+       Removing the face in use falls back to the default for that slot */
+    reactExports.useEffect(() => {
+        void restoreFonts().then(setUploads);
+    }, []);
+    const uploadFace = async (file) => {
+        await addFontFile(file);
+        setUploads([...UPLOADED]);
+    };
+    const dropFace = (slug) => {
+        void removeFont(slug).finally(() => setUploads([...UPLOADED]));
+        if (bodyFace === slug) setBodyFace('eb-garamond');
+        if (titleFace === slug) setTitleFace('fragment-mono');
     };
     const enterDraft = () => {
         setWork(
@@ -2666,8 +2884,15 @@ function App() {
             if (typeof s.inverted === 'boolean') setInverted(s.inverted);
             if (typeof s.sound === 'boolean') setSoundOn(s.sound);
             if (typeof s.platen === 'boolean') setPlaten(s.platen);
-            if (typeof s.textFace === 'string' && faceBySlug(s.textFace)) setBodyFace(s.textFace);
-            if (typeof s.titleFace === 'string' && faceBySlug(s.titleFace))
+            if (
+                typeof s.textFace === 'string' &&
+                (faceBySlug(s.textFace) || s.textFace.startsWith('upload-'))
+            )
+                setBodyFace(s.textFace);
+            if (
+                typeof s.titleFace === 'string' &&
+                (faceBySlug(s.titleFace) || s.titleFace.startsWith('upload-'))
+            )
                 setTitleFace(s.titleFace);
             if (typeof s.commitment === 'boolean') setCommit(s.commitment);
             if (
@@ -3257,6 +3482,9 @@ function App() {
                     }),
                     jsxRuntimeExports.jsx(FacePicker, {
                         slot: 'body',
+                        uploads: uploads,
+                        onUpload: uploadFace,
+                        onRemove: dropFace,
                         value: bodyFace,
                         onPick: setBodyFace,
                         onTaste: (slug) => setTaste(slug ? { slot: 'body', slug } : null),
@@ -3265,6 +3493,9 @@ function App() {
                     }),
                     jsxRuntimeExports.jsx(FacePicker, {
                         slot: 'title',
+                        uploads: uploads,
+                        onUpload: uploadFace,
+                        onRemove: dropFace,
                         value: titleFace,
                         onPick: setTitleFace,
                         onTaste: (slug) => setTaste(slug ? { slot: 'title', slug } : null),

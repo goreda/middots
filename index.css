@@ -882,7 +882,7 @@ s.ov {
     flex: none;
     padding: 3px 0;
     white-space: nowrap;
-    font-size: 13px;
+    font-size: calc(13px + 1pt); /* face names: +1pt */
     letter-spacing: 0;
     color: var(--dim);
     cursor: pointer;
@@ -1014,6 +1014,36 @@ s.ov {
 .story.dialogue .story-text > div {
     padding-left: 1.25em;
     text-indent: -1.25em;
+}
+
+/* ---- the reader's own fonts: first shelf of the face list ---- */
+.face-upload {
+    font-style: italic;
+    opacity: 0.8;
+}
+.face-upload-note {
+    margin: 0 0 0.3em;
+    font-size: 0.72em;
+    opacity: 0.5;
+}
+.face-own {
+    display: flex;
+    align-items: baseline;
+    gap: 0.3em;
+}
+.face-own .face-choice {
+    flex: 1;
+}
+.face-remove {
+    background: none;
+    border: 0;
+    color: inherit;
+    opacity: 0.4;
+    cursor: pointer;
+    padding: 0 0.2em;
+}
+.face-remove:hover {
+    opacity: 0.9;
 }
 
 /* standalone mirror: with no host header above the page, the top fade is the
