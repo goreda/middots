@@ -2517,8 +2517,24 @@ function App() {
             },
             ...(w ?? []),
         ]);
+        focusNewRef.current = id;
         scrollerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
     };
+    /* a new piece opens ready to write: once its editor exists, the caret goes into its text */
+    const focusNewRef = reactExports.useRef(null);
+    reactExports.useEffect(() => {
+        const id = focusNewRef.current;
+        const el = id ? editRefs.current.get(id)?.text : null;
+        if (!id || !el) return;
+        focusNewRef.current = null;
+        el.focus({ preventScroll: true });
+        const range = document.createRange();
+        range.selectNodeContents(el.firstElementChild ?? el);
+        range.collapse(true);
+        const sel = window.getSelection();
+        sel?.removeAllRanges();
+        sel?.addRange(range);
+    }, [work]);
     const removeDraft = (id) => {
         setWork((w) => (w ?? []).filter((p) => p.id !== id));
         editRefs.current.delete(id);
