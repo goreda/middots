@@ -3632,6 +3632,44 @@ function BoxWord({ word }) {
         ),
     });
 }
+/* the sync panel's vocabulary: four signs each, so every word sits in the code's own grid */
+const WORDS = {
+    busy: '\u00b7\u00b7\u00b7\u00b7', // four middots: waiting on the service
+    again: 'once', // type the new code once more
+    mismatch: 'miss', // the two new codes differ
+    moving: 'move', // the bucket is being moved to the new code
+    done: 'done', // the code changed; other devices need the new one
+    wait: 'wait', // too many misses from here; try again in a few minutes
+    down: 'down', // the service did not answer
+    taken: 'used', // the new code belongs to someone already
+    other: 'nope',
+};
+function errorWord(error) {
+    if (/^wait/.test(error)) return WORDS.wait;
+    if (/did not answer/.test(error)) return WORDS.down;
+    if (/taken|409/.test(error)) return WORDS.taken;
+    return WORDS.other;
+}
+/* a state word, dimmed, in the boxes; its full meaning is spoken to screen readers */
+const WORD_MEANING = {
+    [WORDS.busy]: 'working',
+    [WORDS.again]: 'type the new code once more',
+    [WORDS.mismatch]: 'the codes did not match',
+    [WORDS.moving]: 'moving to the new code',
+    [WORDS.done]: 'code changed; other devices need the new one',
+    [WORDS.wait]: 'too many tries from here, wait a few minutes',
+    [WORDS.down]: 'the sync service did not answer',
+    [WORDS.taken]: 'that code is taken',
+    [WORDS.other]: 'that did not work',
+};
+function SyncNote({ word }) {
+    return jsxRuntimeExports.jsx('p', {
+        className: 'sync-note sync-word',
+        role: 'status',
+        'aria-label': WORD_MEANING[word] ?? word,
+        children: jsxRuntimeExports.jsx(BoxWord, { word: word }),
+    });
+}
 function SyncControl({ onJoined, onLeft, onRekeyed }) {
     const [open, setOpen] = reactExports.useState(false);
     const [code, setCode] = reactExports.useState('');
@@ -3641,65 +3679,67 @@ function SyncControl({ onJoined, onLeft, onRekeyed }) {
     const [joined, setJoined] = reactExports.useState(isJoined());
     const [mode, setMode] = reactExports.useState('idle'); // changing the code
     const [shake, setShake] = reactExports.useState(0);
-    const nope = (msg) => {
-        setNote(msg);
+    /* the panel speaks only in four-sign words, set in the same boxes as the code: every state has
+       one word (WORDS), never a sentence. The long meaning rides in aria-label for screen readers. */
+    const nope = (word) => {
+        setNote(word);
         setShake((n) => n + 1);
     };
     const go = async (claim) => {
         if (Array.from(code).length < PIN_MIN) {
-            nope('four signs');
+            nope('');
             return;
         }
-        setNote('\u2026');
+        setNote(WORDS.busy);
         const r = await join(code, claim);
         if (r.ok) {
             setJoined(true);
             setCode('');
             setAskClaim(false);
-            setNote(r.created ? 'code claimed, synced' : 'joined, synced');
+            setNote('');
             await loadPrivate();
             await onJoined();
             return;
         }
         if (r.unknown) {
             setAskClaim(true);
-            setNote('nobody uses this code yet. make it yours?');
+            setNote('');
             return;
-        }
-        nope(r.error);
+        } // the button turns into "mine"
+        nope(errorWord(r.error));
     };
     const next = async () => {
         if (Array.from(code).length < PIN_MIN) {
-            nope('four signs');
+            nope('');
             return;
         }
         if (mode === 'new') {
             setFirst(code);
             setCode('');
             setMode('again');
-            setNote('type it once more');
+            setNote(WORDS.again);
             return;
         }
         if (code !== first) {
             setCode('');
             setFirst('');
             setMode('new');
-            nope('they didn\u2019t match. new code');
+            nope(WORDS.mismatch);
             return;
         }
         setMode('busy');
-        setNote('moving\u2026');
-        const r = await changeCode(code, (done, total) => setNote(`moving ${done}/${total}`));
+        setNote(WORDS.moving);
+        const r = await changeCode(code, () => setNote(WORDS.moving));
         setCode('');
         setFirst('');
         if (!r.ok) {
             setMode('new');
-            nope(r.error);
+            nope(errorWord(r.error));
             return;
         }
         await onRekeyed();
         setMode('idle');
-        setNote('code changed. other devices need the new one');
+        setNote(WORDS.done);
     };
     const cancel = () => {
         setMode('idle');
@@ -3750,22 +3790,21 @@ function SyncControl({ onJoined, onLeft, onRekeyed }) {
                             mode === 'idle' &&
                             jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
                                 children: [
-                                    jsxRuntimeExports.jsx('p', {
-                                        className: 'sync-note',
-                                        children: note || 'this device is synced',
-                                    }),
+                                    note && jsxRuntimeExports.jsx(SyncNote, { word: note }),
                                     jsxRuntimeExports.jsx('button', {
                                         type: 'button',
-                                        className: 'face-choice',
+                                        className: 'face-choice box-submit',
+                                        'aria-label': 'change code',
                                         onClick: () => {
                                             setMode('new');
-                                            setNote('new code');
+                                            setNote('');
                                         },
-                                        children: 'change code',
+                                        children: jsxRuntimeExports.jsx(BoxWord, { word: 'code' }),
                                     }),
                                     jsxRuntimeExports.jsx('button', {
                                         type: 'button',
-                                        className: 'face-choice',
+                                        className: 'face-choice box-submit',
+                                        'aria-label': 'leave',
                                         onClick: () => {
                                             // leaving resets this device to a fresh page, at once: nothing is lost, it all stays
                                             // on the code, and joining again brings it back
@@ -3773,7 +3812,7 @@ function SyncControl({ onJoined, onLeft, onRekeyed }) {
                                             clearPrivate();
                                             onLeft();
                                         },
-                                        children: 'leave',
+                                        children: jsxRuntimeExports.jsx(BoxWord, { word: 'exit' }),
                                     }),
                                 ],
                             }),
@@ -3801,28 +3840,28 @@ function SyncControl({ onJoined, onLeft, onRekeyed }) {
                                             },
                                             mode,
                                         ),
-                                    jsxRuntimeExports.jsx('p', {
-                                        className: 'sync-note',
-                                        children: note,
-                                    }),
+                                    note && jsxRuntimeExports.jsx(SyncNote, { word: note }),
                                     mode !== 'busy' &&
                                         jsxRuntimeExports.jsxs('div', {
                                             className: 'sync-actions',
                                             children: [
                                                 jsxRuntimeExports.jsx('button', {
                                                     type: 'button',
-                                                    className: 'face-choice',
+                                                    className: 'face-choice box-submit',
+                                                    'aria-label': 'back',
                                                     onClick: cancel,
-                                                    children: 'back',
+                                                    children: jsxRuntimeExports.jsx(BoxWord, {
+                                                        word: 'back',
+                                                    }),
                                                 }),
                                                 jsxRuntimeExports.jsx('button', {
                                                     type: 'submit',
                                                     className: 'face-choice box-submit',
                                                     'aria-label':
-                                                        mode === 'new' ? 'next' : 'change',
+                                                        mode === 'new' ? 'next' : 'change code',
                                                     disabled: Array.from(code).length < PIN_MIN,
                                                     children: jsxRuntimeExports.jsx(BoxWord, {
-                                                        word: mode === 'new' ? 'next' : 'change',
+                                                        word: mode === 'new' ? 'next' : 'save',
                                                     }),
                                                 }),
                                             ],
@@ -3851,17 +3890,15 @@ function SyncControl({ onJoined, onLeft, onRekeyed }) {
                                     jsxRuntimeExports.jsx('button', {
                                         type: 'submit',
                                         className: 'face-choice box-submit',
-                                        'aria-label': askClaim ? 'make it mine' : 'join',
+                                        'aria-label': askClaim
+                                            ? 'nobody uses this code yet: make it mine'
+                                            : 'join',
                                         disabled: Array.from(code).length < PIN_MIN,
                                         children: jsxRuntimeExports.jsx(BoxWord, {
-                                            word: askClaim ? 'make it mine' : 'join',
+                                            word: askClaim ? 'mine' : 'join',
                                         }),
                                     }),
-                                    note &&
-                                        jsxRuntimeExports.jsx('p', {
-                                            className: 'sync-note',
-                                            children: note,
-                                        }),
+                                    note && jsxRuntimeExports.jsx(SyncNote, { word: note }),
                                 ],
                             }),
                     ],

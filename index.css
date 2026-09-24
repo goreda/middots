@@ -1682,6 +1682,19 @@ html.font-dropping body {
     box-shadow: inset 0 0 0 1px currentColor;
 }
 
+/* a state word in the sync panel: the code's boxes, dimmed, no border colour of its own */
+.sync-note.sync-word {
+    width: auto;
+}
+.sync-word .pin-box {
+    color: var(--dim);
+    border-style: dashed;
+}
+/* one grid: a state word sits one box gap under the row above it, like the submit word under the code */
+.sync-panel form > .sync-word {
+    margin-top: -5px;
+}
+
 /* standalone mirror: with no host header above the page, the top fade is the
    page's own background thinning out (mask), so it follows --bg and inversion */
 .seam.standalone {
