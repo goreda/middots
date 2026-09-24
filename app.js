@@ -1908,12 +1908,12 @@ const clampPt = (v, [lo, hi]) => Math.round(Math.min(hi, Math.max(lo, v)) * 2) /
 /* a size you type: digits in the circle, Enter or leaving sets it, arrows nudge by one */
 /* ---- the horizon: one draggable control for where the text begins ----
    The horizon is the line a piece's first baseline sits on (the page's top padding, --pin). Dragging
-   the control up or down moves it with the finger, 1:1, and the top fade spreads or gathers with it,
-   so the text always surfaces out of the fade at the same point. Arrow keys nudge it, a double-click
+   the control up or down moves it with the finger, 1:1; the controls ride along (so the handle stays
+   under the finger) and the top fade follows, always reaching a fixed distance past the first line,
+   so the text surfaces out of the fade the same way at any height. Arrow keys nudge it, a double-click
    (or double-tap) puts it back. Stored as a shift from the default, so it fits phone and desktop alike. */
 const HZ_RANGE = [-60, 280];
 const clampHz = (v) => Math.round(Math.min(HZ_RANGE[1], Math.max(HZ_RANGE[0], v)));
-const seamFor = (hz) => Math.max(88, Math.round(264 + hz * 1.4)); // the fade grows a little faster than the line moves
 function HorizonControl({ value, onSet }) {
     const drag = reactExports.useRef(null);
     const [active, setActive] = reactExports.useState(false);
@@ -1957,30 +1957,9 @@ function HorizonControl({ value, onSet }) {
                 onSet(clampHz(value + (e.key === 'ArrowDown' ? 8 : -8)));
             }
         },
-        children: jsxRuntimeExports.jsxs('svg', {
-            width: '14',
-            height: '14',
-            viewBox: '0 0 14 14',
+        children: jsxRuntimeExports.jsx('span', {
+            className: 'horizon-line',
             'aria-hidden': 'true',
-            children: [
-                jsxRuntimeExports.jsx('path', {
-                    d: 'M2 9.5h10',
-                    stroke: 'currentColor',
-                    strokeWidth: '1.2',
-                }),
-                jsxRuntimeExports.jsx('path', {
-                    d: 'M3.5 7h7',
-                    stroke: 'currentColor',
-                    strokeWidth: '1',
-                    opacity: '.5',
-                }),
-                jsxRuntimeExports.jsx('path', {
-                    d: 'M5 4.5h4',
-                    stroke: 'currentColor',
-                    strokeWidth: '1',
-                    opacity: '.25',
-                }),
-            ],
         }),
     });
 }
@@ -3956,10 +3935,9 @@ function App() {
     reactExports.useEffect(() => {
         document.documentElement.style.setProperty('--lh', String(lh));
     }, [lh]);
-    // the horizon moves the text's first baseline (--hz shifts --pin) and spreads the fade with it
+    // the horizon moves the text's first line, the controls and the fade together (--hz feeds --pin, --ctl, --seam-h in style.css)
     reactExports.useEffect(() => {
         document.documentElement.style.setProperty('--hz', `${hz}px`);
-        document.documentElement.style.setProperty('--seam-h', `${seamFor(hz)}px`);
         // platen: the typing line holds on the horizon, so it rides the drag live
         if (platenRef.current) requestAnimationFrame(() => platenFollowRef.current());
     }, [hz]);

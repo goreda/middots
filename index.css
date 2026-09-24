@@ -19,13 +19,17 @@
     --dim: #8a8a8a;
     --hairline: #3a3a3a;
     --lh: 1.42;
-    --seam-h: 264px;
+    --seam-over: 64px; /* how far the top fade reaches past the first line of text */
+    --head: 0px; /* a piece's head above its first line (phone only; beside the text on a wide screen) */
+    --seam-h: calc(var(--pin) - var(--vt) + var(--head) + var(--seam-over));
     --font-body: 'EB Garamond', Georgia, serif;
     --font-mono: 'Fragment Mono', monospace;
     --vt: 0px; /* top inset reserved for a host header; 0 in the mirror */
     --hz: 0px; /* the horizon's shift, set by the horizon control */
     --pin: calc(190px + var(--hz) + var(--vt));
-    --ctl: calc(190px + var(--vt));
+    --ctl: calc(
+        190px + var(--hz) + var(--vt)
+    ); /* the controls start on the horizon and move with it */
 }
 :root.inverted {
     --bg: #d2d2d2;
@@ -378,9 +382,27 @@ body {
     user-select: none;
     -webkit-user-select: none;
 }
-.controls .horizon-control.on {
-    color: var(--ink);
-    border-color: var(--dim);
+.controls .horizon-control {
+    border: 0;
+    border-radius: 0;
+    background: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.horizon-line {
+    display: block;
+    width: 34px;
+    height: 1px;
+    background: var(--hairline);
+    transition: background 0.2s ease;
+} /* the rings' width and stroke */
+.controls .horizon-control:hover .horizon-line,
+.controls .horizon-control:focus-visible .horizon-line {
+    background: var(--ink);
+} /* as a ring turns ink on hover */
+.controls .horizon-control.on .horizon-line {
+    background: var(--ink);
 }
 :root.ui-awake .controls,
 :root.horizon-drag .controls {
@@ -440,7 +462,8 @@ body {
 @media (max-width: 700px) {
     :root {
         --pin: calc(120px + var(--hz) + var(--vt));
-        --ctl: calc(120px + var(--vt));
+        --ctl: calc(120px + var(--hz) + var(--vt));
+        --head: calc(2 * 1.42 * var(--fs-mono) + 8px + 16px);
     }
     .page {
         padding: var(--pin) 20px 96px 18px;
