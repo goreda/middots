@@ -107,6 +107,7 @@ body {
     background: none;
     border: 0;
     padding: 0;
+    line-height: inherit; /* a button resets line-height to normal; the head's 1.42 must reach the title and date, as it does in draft */
     cursor: pointer;
 }
 .story.open .story-head {
