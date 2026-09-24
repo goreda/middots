@@ -2385,6 +2385,21 @@ function App() {
         };
     };
     const harvestAll = (w) => w.map(harvestPiece);
+    /* fold / unfold a piece. Folding while reading inside it (its title pinned at the top) would collapse
+       the text out from under the view and drop the reader somewhere further down the archive. So the view
+       first steps back to the piece's own start, putting its title where the pinned title was, and then
+       the piece closes: the reader stays level with the closed piece. */
+    const toggleFold = (id) => {
+        const sc = scrollerRef.current;
+        const section = document.getElementById(id);
+        const head = section?.querySelector('.story-head');
+        if (open[id] && sc && section && head) {
+            const pinY = head.getBoundingClientRect().top; // where the title sits now (pinned, or natural)
+            const naturalY = section.getBoundingClientRect().top; // where it sits when not pinned: the piece's top edge
+            if (naturalY < pinY - 1) sc.scrollTop -= pinY - naturalY;
+        }
+        setOpen((prev) => ({ ...prev, [id]: !prev[id] }));
+    };
     const enterDraft = () => {
         setWork(
             (w) =>
@@ -2803,11 +2818,7 @@ function App() {
                                           {
                                               piece: p,
                                               open: !!open[p.id],
-                                              onToggle: () =>
-                                                  setOpen((prev) => ({
-                                                      ...prev,
-                                                      [p.id]: !prev[p.id],
-                                                  })),
+                                              onToggle: () => toggleFold(p.id),
                                           },
                                           p.id,
                                       ),
@@ -2821,8 +2832,7 @@ function App() {
                                   {
                                       wp: wp,
                                       open: !!open[wp.id],
-                                      onToggle: () =>
-                                          setOpen((prev) => ({ ...prev, [wp.id]: !prev[wp.id] })),
+                                      onToggle: () => toggleFold(wp.id),
                                       register: register,
                                       onEditInput: stampEdit,
                                       onLoadVersion: loadVersion,
