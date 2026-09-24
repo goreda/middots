@@ -1394,7 +1394,10 @@ const ARCHIVE_SUMMARY =
  * Cover - the main page: the folders in one centered column, and a + under them.
  * The + turns into a bare name field (just the crimson caret); Enter makes the folder and opens it in
  * draft mode with a new piece. A folder's name is edited in the same field: double-click it, or hold
- * it on a phone. Folders from pieces.json come first; folders made on the page follow.
+ * it on a phone. Beside the + sits "edit": every folder becomes its name field with a × after it -
+ * rename in place, × deletes the folder and everything in it at once (no warning: the reader's call;
+ * the Instinct archive is the backup). "done" closes it. Folders from pieces.json come first; folders
+ * made on the page follow.
  */
 function NameField({ initial, onDone }) {
     const [name, setName] = reactExports.useState(initial);
@@ -1619,8 +1622,28 @@ function Logo() {
         }),
     });
 }
-function Cover({ folders, count, onOpen, onCreate, onRename }) {
+/* a folder's name in edit mode: stays a field; Enter or leaving it keeps the new name (an empty one is ignored) */
+function FolderRename({ initial, onDone }) {
+    const [name, setName] = reactExports.useState(initial);
+    return jsxRuntimeExports.jsx('input', {
+        className: 'cover-name',
+        value: name,
+        maxLength: 60,
+        size: Math.max(1, name.length + 1),
+        'aria-label': 'folder name',
+        onChange: (e) => setName(e.target.value),
+        onKeyDown: (e) => {
+            if (e.key === 'Enter') e.currentTarget.blur();
+            if (e.key === 'Escape') {
+                setName(initial);
+            }
+        },
+        onBlur: () => onDone(name.trim() || null),
+    });
+}
+function Cover({ folders, count, onOpen, onCreate, onRename, onDelete }) {
     const [naming, setNaming] = reactExports.useState(false); // the + is a name field
+    const [editAll, setEditAll] = reactExports.useState(false); // edit: every folder is a name field with a × after it
     const [editing, setEditing] = reactExports.useState(null); // a folder being renamed
     const hold = reactExports.useRef(undefined);
     const held = reactExports.useRef(false);
@@ -1640,44 +1663,67 @@ function Cover({ folders, count, onOpen, onCreate, onRename }) {
                 className: 'cover-folders',
                 'aria-label': 'folders',
                 children: folders.map((f) =>
-                    editing === f.id
-                        ? jsxRuntimeExports.jsx(
-                              NameField,
+                    editAll
+                        ? jsxRuntimeExports.jsxs(
+                              'span',
                               {
-                                  initial: f.title,
-                                  onDone: (n) => {
-                                      if (n) onRename(f.id, n);
-                                      setEditing(null);
-                                  },
-                              },
-                              f.id,
-                          )
-                        : jsxRuntimeExports.jsxs(
-                              'button',
-                              {
-                                  type: 'button',
-                                  className: 'cover-folder',
-                                  onClick: () => {
-                                      if (!held.current) onOpen(f.id);
-                                  },
-                                  onDoubleClick: () => setEditing(f.id),
-                                  onPointerDown: () => press(f.id),
-                                  onPointerUp: release,
-                                  onPointerLeave: release,
-                                  onContextMenu: (e) => e.preventDefault(),
+                                  className: 'cover-edit-row',
                                   children: [
-                                      jsxRuntimeExports.jsx('span', {
-                                          className: 'cover-folder-title',
-                                          children: f.title,
+                                      jsxRuntimeExports.jsx(FolderRename, {
+                                          initial: f.title,
+                                          onDone: (n) => {
+                                              if (n && n !== f.title) onRename(f.id, n);
+                                          },
                                       }),
-                                      jsxRuntimeExports.jsx('span', {
-                                          className: 'cover-folder-count',
-                                          children: count(f.id),
+                                      jsxRuntimeExports.jsx('button', {
+                                          type: 'button',
+                                          className: 'cover-delete',
+                                          'aria-label': `delete ${f.title}`,
+                                          onClick: () => onDelete(f.id),
+                                          children: '\u00D7',
                                       }),
                                   ],
                               },
                               f.id,
-                          ),
+                          )
+                        : editing === f.id
+                          ? jsxRuntimeExports.jsx(
+                                NameField,
+                                {
+                                    initial: f.title,
+                                    onDone: (n) => {
+                                        if (n) onRename(f.id, n);
+                                        setEditing(null);
+                                    },
+                                },
+                                f.id,
+                            )
+                          : jsxRuntimeExports.jsxs(
+                                'button',
+                                {
+                                    type: 'button',
+                                    className: 'cover-folder',
+                                    onClick: () => {
+                                        if (!held.current) onOpen(f.id);
+                                    },
+                                    onDoubleClick: () => setEditing(f.id),
+                                    onPointerDown: () => press(f.id),
+                                    onPointerUp: release,
+                                    onPointerLeave: release,
+                                    onContextMenu: (e) => e.preventDefault(),
+                                    children: [
+                                        jsxRuntimeExports.jsx('span', {
+                                            className: 'cover-folder-title',
+                                            children: f.title,
+                                        }),
+                                        jsxRuntimeExports.jsx('span', {
+                                            className: 'cover-folder-count',
+                                            children: count(f.id),
+                                        }),
+                                    ],
+                                },
+                                f.id,
+                            ),
                 ),
             }),
             jsxRuntimeExports.jsx('div', {
@@ -1690,12 +1736,24 @@ function Cover({ folders, count, onOpen, onCreate, onRename }) {
                               if (n) onCreate(n);
                           },
                       })
-                    : jsxRuntimeExports.jsx('button', {
-                          type: 'button',
-                          className: 'cover-add',
-                          'aria-label': 'new folder',
-                          onClick: () => setNaming(true),
-                          children: '+',
+                    : jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
+                          children: [
+                              !editAll &&
+                                  jsxRuntimeExports.jsx('button', {
+                                      type: 'button',
+                                      className: 'cover-add',
+                                      'aria-label': 'new folder',
+                                      onClick: () => setNaming(true),
+                                      children: '+',
+                                  }),
+                              (folders.length > 0 || editAll) &&
+                                  jsxRuntimeExports.jsx('button', {
+                                      type: 'button',
+                                      className: 'cover-edit',
+                                      onClick: () => setEditAll((v) => !v),
+                                      children: editAll ? 'done' : 'edit',
+                                  }),
+                          ],
                       }),
             }),
         ],
@@ -1873,6 +1931,7 @@ function HorizonControl({ value, onSet }) {
             e.currentTarget.setPointerCapture(e.pointerId);
             drag.current = { y: e.clientY, from: value, moved: false };
             setActive(true);
+            document.documentElement.classList.add('horizon-drag'); // the controls stay up while the finger holds it
         },
         onPointerMove: (e) => {
             const d = drag.current;
@@ -1884,10 +1943,12 @@ function HorizonControl({ value, onSet }) {
         onPointerUp: () => {
             drag.current = null;
             setActive(false);
+            document.documentElement.classList.remove('horizon-drag');
         },
         onPointerCancel: () => {
             drag.current = null;
             setActive(false);
+            document.documentElement.classList.remove('horizon-drag');
         },
         onDoubleClick: () => onSet(0),
         onKeyDown: (e) => {
@@ -3813,6 +3874,7 @@ function App() {
     // folders made on the page (the + on the main page); saved and synced with the rest of the state
     const [ownFolders, setOwnFolders] = reactExports.useState([]);
     const allFolders = [...FOLDERS, ...ownFolders];
+    const liveFolders = () => allFolders.filter((f) => !goneFoldersRef.current.includes(f.id));
     const ownFoldersRef = reactExports.useRef(ownFolders);
     ownFoldersRef.current = ownFolders; // for the back/forward handler, registered once
     const createFolder = (title) => {
@@ -3832,6 +3894,18 @@ function App() {
     const [folderNames, setFolderNames] = reactExports.useState({});
     const renameFolder = (id, title) => setFolderNames((m) => ({ ...m, [id]: title }));
     const named = (f) => (folderNames[f.id] ? { ...f, title: folderNames[f.id] } : f);
+    /* deleting a folder: one made on the page leaves the list; a pieces.json folder is marked gone (its
+       published pieces are data and stay in the file, but nothing on the page reaches them any more).
+       Either way the drafts worked on in it go with it. No confirmation, by the reader's ruling. */
+    const [goneFolders, setGoneFolders] = reactExports.useState([]);
+    const goneFoldersRef = reactExports.useRef(goneFolders);
+    goneFoldersRef.current = goneFolders;
+    const deleteFolder = (id) => {
+        if (ownFolders.some((f) => f.id === id))
+            setOwnFolders((fs) => fs.filter((f) => f.id !== id));
+        else setGoneFolders((g) => (g.includes(id) ? g : [...g, id]));
+        setWork((w) => (w ? w.filter((wp) => wp.folder !== id || wp.published) : w));
+    };
     /* opening a folder: one with nothing published in it (a folder made on the page) opens in draft mode,
        with a new piece if it holds no drafts yet; the others open for reading */
     const openFolder = (id) => {
@@ -3857,6 +3931,7 @@ function App() {
     const fileRef = reactExports.useRef(null);
     const editRefs = reactExports.useRef(new Map());
     const [platen, setPlaten] = reactExports.useState(false);
+    const platenFollowRef = reactExports.useRef(() => {}); // the latest platenFollow, for effects declared before it
     const [focusDim, setFocusDim] = reactExports.useState(false); // focus dim: all but the paragraph being written fades
     const [bodyFace, setBodyFace] = reactExports.useState('eb-garamond');
     const [titleFace, setTitleFace] = reactExports.useState('fragment-mono');
@@ -3885,6 +3960,8 @@ function App() {
     reactExports.useEffect(() => {
         document.documentElement.style.setProperty('--hz', `${hz}px`);
         document.documentElement.style.setProperty('--seam-h', `${seamFor(hz)}px`);
+        // platen: the typing line holds on the horizon, so it rides the drag live
+        if (platenRef.current) requestAnimationFrame(() => platenFollowRef.current());
     }, [hz]);
     reactExports.useEffect(() => {
         if (bg) document.documentElement.style.setProperty('--bg', bg);
@@ -4063,6 +4140,7 @@ function App() {
         if (Math.abs(delta) < 0.5) return;
         sc.scrollTo({ top: sc.scrollTop + delta, behavior: 'auto' });
     };
+    platenFollowRef.current = platenFollow;
     reactExports.useEffect(() => {
         document.documentElement.classList.toggle('platen', platen && mode === 'draft');
         if (!(platen && mode === 'draft')) return;
@@ -4217,14 +4295,17 @@ function App() {
     /* search: the shelf as it stands - drafts in their current version once drafting has begun */
     const searchItems = () => {
         const w = workRef.current;
+        const gone = goneFoldersRef.current; // a deleted folder's pieces are out of reach, search included
         if (w)
-            return w.map((wp) => ({
-                id: wp.id,
-                folder: wp.folder,
-                title: wp.versions[wp.current].title,
-                lines: wp.versions[wp.current].lines,
-            }));
-        return PIECES.map((p) => ({
+            return w
+                .filter((wp) => !gone.includes(wp.folder))
+                .map((wp) => ({
+                    id: wp.id,
+                    folder: wp.folder,
+                    title: wp.versions[wp.current].title,
+                    lines: wp.versions[wp.current].lines,
+                }));
+        return PIECES.filter((p) => !gone.includes(folderOf(p))).map((p) => ({
             id: p.id,
             folder: folderOf(p),
             title: p.title,
@@ -4650,6 +4731,7 @@ function App() {
             view,
             folders: ownFolders,
             folderNames,
+            goneFolders,
             scroll: sc ? Math.round(sc.scrollTop) : 0,
         };
         storeSet(STATE_KEY, JSON.stringify(payload));
@@ -4682,6 +4764,11 @@ function App() {
                 if (typeof t === 'string' && t.trim()) names[id] = t;
         }
         setFolderNames(names);
+        setGoneFolders(
+            Array.isArray(data.goneFolders)
+                ? data.goneFolders.filter((x) => typeof x === 'string')
+                : [],
+        );
         const fromHash = viewFromHash(own);
         if (fromHash) setView(fromHash);
         else if (
@@ -4751,6 +4838,7 @@ function App() {
         view,
         ownFolders,
         folderNames,
+        goneFolders,
     ]);
     // edits in progress: save after a pause in typing, and when the page goes away
     reactExports.useEffect(() => {
@@ -4856,11 +4944,12 @@ function App() {
                 children:
                     mode === 'read' && view === 'home'
                         ? jsxRuntimeExports.jsx(Cover, {
-                              folders: allFolders.map(named),
+                              folders: liveFolders().map(named),
                               count: folderCount,
                               onOpen: openFolder,
                               onCreate: createFolder,
                               onRename: renameFolder,
+                              onDelete: deleteFolder,
                           })
                         : mode === 'read'
                           ? jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
@@ -5258,6 +5347,7 @@ function App() {
                                 }),
                             ],
                         }),
+                    jsxRuntimeExports.jsx(HorizonControl, { value: hz, onSet: setHz }),
                     jsxRuntimeExports.jsx('button', {
                         type: 'button',
                         'aria-label': 'invert colors',
@@ -5287,7 +5377,6 @@ function App() {
                     !onCover &&
                         jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
                             children: [
-                                jsxRuntimeExports.jsx(HorizonControl, { value: hz, onSet: setHz }),
                                 jsxRuntimeExports.jsx(FacePicker, {
                                     slot: 'body',
                                     uploads: uploads,
