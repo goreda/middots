@@ -1347,15 +1347,8 @@ function Cover({ folders, onOpen, onCreate }) {
                 ),
             }),
             naming
-                ? jsxRuntimeExports.jsx('form', {
+                ? jsxRuntimeExports.jsx('div', {
                       className: 'cover-new',
-                      onSubmit: (e) => {
-                          e.preventDefault();
-                          if (name.trim()) {
-                              onCreate(name.trim());
-                              done();
-                          }
-                      },
                       children: jsxRuntimeExports.jsx('input', {
                           className: 'cover-name',
                           autoFocus: true,
@@ -1365,6 +1358,10 @@ function Cover({ folders, onOpen, onCreate }) {
                           'aria-label': 'new folder name',
                           onChange: (e) => setName(e.target.value),
                           onKeyDown: (e) => {
+                              if (e.key === 'Enter' && name.trim()) {
+                                  onCreate(name.trim());
+                                  done();
+                              }
                               if (e.key === 'Escape') done();
                           },
                           onBlur: () => {
