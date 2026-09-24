@@ -2675,7 +2675,8 @@ function App() {
         }
     };
     /* ---- saved state (mirror only) ----
-       On the standalone page, settings, drafts and the current mode survive a reload. The state is written
+       On the standalone page, settings, drafts, the current mode, which pieces are unfolded and the scroll
+       position survive a reload. The state is written
        as an export payload (makePayload) and read back through doImport, so it follows the same rules as an
        imported file: published originals are restored from the archive, edits live in their own versions.
        Typing does not re-render the app (the editor owns its DOM), so edits are harvested on a short pause
@@ -2686,7 +2687,14 @@ function App() {
     saveStateRef.current = () => {
         if (!restored) return;
         const w = workRef.current;
-        const payload = { ...makePayload(w ? harvestAll(w) : null), mode };
+        const sc = scrollerRef.current;
+        // besides the export payload: which pieces are unfolded and where the page was scrolled to
+        const payload = {
+            ...makePayload(w ? harvestAll(w) : null),
+            mode,
+            open,
+            scroll: sc ? Math.round(sc.scrollTop) : 0,
+        };
         storeSet(STATE_KEY, JSON.stringify(payload));
     };
     // once, on load: bring back the saved state before anything is written over it
@@ -2694,12 +2702,27 @@ function App() {
         const saved = storeGet(STATE_KEY);
         if (saved) {
             let mode = 'read';
+            let data = {};
             try {
-                mode = JSON.parse(saved).mode === 'draft' ? 'draft' : 'read';
+                data = JSON.parse(saved);
+                mode = data.mode === 'draft' ? 'draft' : 'read';
             } catch {
                 /* ignored below */
             }
             doImport(saved, { mode });
+            // fold state: only true/false flags are taken back; pieces that no longer exist just never render
+            if (data.open && typeof data.open === 'object') {
+                const flags = {};
+                for (const [id, v] of Object.entries(data.open))
+                    if (typeof v === 'boolean') flags[id] = v;
+                setOpen(flags);
+            }
+            // scroll position: applied after the restored pieces have laid out (two frames)
+            const top = typeof data.scroll === 'number' ? data.scroll : 0;
+            if (top > 0)
+                requestAnimationFrame(() =>
+                    requestAnimationFrame(() => scrollerRef.current?.scrollTo({ top })),
+                );
         }
         setRestored(true); // batched with the restore, so the first save already sees the restored state
     }, []);
@@ -2722,6 +2745,7 @@ function App() {
         titleFace,
         work,
         mode,
+        open,
     ]);
     // edits in progress: save after a pause in typing, and when the page goes away
     reactExports.useEffect(() => {
@@ -2735,10 +2759,19 @@ function App() {
             if (document.visibilityState === 'hidden') flush();
         };
         document.addEventListener('input', onInput, true);
+        const sc = scrollerRef.current;
+        let scrollTimer;
+        const onScroll = () => {
+            window.clearTimeout(scrollTimer);
+            scrollTimer = window.setTimeout(() => saveStateRef.current(), 400);
+        };
+        sc?.addEventListener('scroll', onScroll, { passive: true });
         document.addEventListener('visibilitychange', onVisibility);
         window.addEventListener('pagehide', flush);
         return () => {
             window.clearTimeout(timer);
+            window.clearTimeout(scrollTimer);
+            sc?.removeEventListener('scroll', onScroll);
             document.removeEventListener('input', onInput, true);
             document.removeEventListener('visibilitychange', onVisibility);
             window.removeEventListener('pagehide', flush);

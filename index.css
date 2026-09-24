@@ -63,6 +63,14 @@ html {
     display: none;
 }
 
+/* OpenType: kerning plus the standard and contextual ligatures every face on the shelf carries.
+   Discretionary ligatures stay off: in these faces they are historical forms (ct, st) that pull
+   the eye in running text. The font files keep all their features, so any of them can be turned on. */
+html {
+    font-kerning: normal;
+    font-variant-ligatures: common-ligatures contextual;
+    text-rendering: optimizeLegibility;
+}
 body {
     background: var(--bg);
     color: var(--ink);
@@ -402,7 +410,7 @@ body {
     transform: translateY(-50%);
     white-space: nowrap;
     font-family: var(--font-mono);
-    font-size: 8.5pt;
+    font-size: 9.5pt; /* button labels: +1pt from 8.5 */
     letter-spacing: 0.04em;
     color: var(--dim);
     pointer-events: none;
@@ -685,7 +693,7 @@ span.story-title.editable:empty::before {
     transform: translateX(-50%);
     white-space: nowrap;
     font-family: var(--font-mono);
-    font-size: 8pt;
+    font-size: 9pt;
     letter-spacing: 0.04em;
     color: var(--dim);
     pointer-events: none;
@@ -937,7 +945,7 @@ s.ov {
     transform: translateY(-50%);
     white-space: nowrap;
     font-family: var(--font-mono);
-    font-size: 8.5pt;
+    font-size: 9.5pt;
     letter-spacing: 0.04em;
     color: var(--dim);
     pointer-events: none;
