@@ -23,7 +23,8 @@
     --font-body: 'EB Garamond', Georgia, serif;
     --font-mono: 'Fragment Mono', monospace;
     --vt: 0px; /* top inset reserved for a host header; 0 in the mirror */
-    --pin: calc(190px + var(--vt));
+    --hz: 0px; /* the horizon's shift, set by the horizon control */
+    --pin: calc(190px + var(--hz) + var(--vt));
     --ctl: calc(190px + var(--vt));
 }
 :root.inverted {
@@ -370,6 +371,17 @@ body {
     max-height: calc(100vh - var(--ctl) - 20px);
     overflow: visible; /* era menu and hover labels live left of the box */
 }
+/* the horizon control is dragged: no scrolling or text selection under the finger */
+.controls .horizon-control {
+    touch-action: none;
+    cursor: ns-resize;
+    user-select: none;
+    -webkit-user-select: none;
+}
+.controls .horizon-control.on {
+    color: var(--ink);
+    border-color: var(--dim);
+}
 :root.ui-awake .controls {
     opacity: 1;
     pointer-events: auto;
@@ -426,7 +438,7 @@ body {
 
 @media (max-width: 700px) {
     :root {
-        --pin: calc(120px + var(--vt));
+        --pin: calc(120px + var(--hz) + var(--vt));
         --ctl: calc(120px + var(--vt));
     }
     .page {

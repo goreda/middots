@@ -1848,6 +1848,81 @@ const TEXT_PT = [8, 48];
 const INDEX_PT = [6, 24];
 const clampPt = (v, [lo, hi]) => Math.round(Math.min(hi, Math.max(lo, v)) * 2) / 2;
 /* a size you type: digits in the circle, Enter or leaving sets it, arrows nudge by one */
+/* ---- the horizon: one draggable control for where the text begins ----
+   The horizon is the line a piece's first baseline sits on (the page's top padding, --pin). Dragging
+   the control up or down moves it with the finger, 1:1, and the top fade spreads or gathers with it,
+   so the text always surfaces out of the fade at the same point. Arrow keys nudge it, a double-click
+   (or double-tap) puts it back. Stored as a shift from the default, so it fits phone and desktop alike. */
+const HZ_RANGE = [-60, 280];
+const clampHz = (v) => Math.round(Math.min(HZ_RANGE[1], Math.max(HZ_RANGE[0], v)));
+const seamFor = (hz) => Math.max(88, Math.round(264 + hz * 1.4)); // the fade grows a little faster than the line moves
+function HorizonControl({ value, onSet }) {
+    const drag = reactExports.useRef(null);
+    const [active, setActive] = reactExports.useState(false);
+    return jsxRuntimeExports.jsx('button', {
+        type: 'button',
+        className: `horizon-control${active ? ' on' : ''}`,
+        'aria-label': 'horizon',
+        'data-tip': 'horizon \u00B7 drag',
+        role: 'slider',
+        'aria-orientation': 'vertical',
+        'aria-valuemin': HZ_RANGE[0],
+        'aria-valuemax': HZ_RANGE[1],
+        'aria-valuenow': value,
+        onPointerDown: (e) => {
+            e.currentTarget.setPointerCapture(e.pointerId);
+            drag.current = { y: e.clientY, from: value, moved: false };
+            setActive(true);
+        },
+        onPointerMove: (e) => {
+            const d = drag.current;
+            if (!d) return;
+            const dy = e.clientY - d.y;
+            if (Math.abs(dy) > 2) d.moved = true;
+            if (d.moved) onSet(clampHz(d.from + dy));
+        },
+        onPointerUp: () => {
+            drag.current = null;
+            setActive(false);
+        },
+        onPointerCancel: () => {
+            drag.current = null;
+            setActive(false);
+        },
+        onDoubleClick: () => onSet(0),
+        onKeyDown: (e) => {
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                onSet(clampHz(value + (e.key === 'ArrowDown' ? 8 : -8)));
+            }
+        },
+        children: jsxRuntimeExports.jsxs('svg', {
+            width: '14',
+            height: '14',
+            viewBox: '0 0 14 14',
+            'aria-hidden': 'true',
+            children: [
+                jsxRuntimeExports.jsx('path', {
+                    d: 'M2 9.5h10',
+                    stroke: 'currentColor',
+                    strokeWidth: '1.2',
+                }),
+                jsxRuntimeExports.jsx('path', {
+                    d: 'M3.5 7h7',
+                    stroke: 'currentColor',
+                    strokeWidth: '1',
+                    opacity: '.5',
+                }),
+                jsxRuntimeExports.jsx('path', {
+                    d: 'M5 4.5h4',
+                    stroke: 'currentColor',
+                    strokeWidth: '1',
+                    opacity: '.25',
+                }),
+            ],
+        }),
+    });
+}
 function SizeField({ label, value, range, onSet }) {
     const [draft, setDraft] = reactExports.useState(null);
     const commitDraft = () => {
@@ -3772,7 +3847,7 @@ function App() {
         (work ?? []).filter((wp) => wp.folder === id && !wp.published).length;
     const [work, setWork] = reactExports.useState(null);
     const [lh, setLh] = reactExports.useState(1.42);
-    const [seamH, setSeamH] = reactExports.useState(264);
+    const [hz, setHz] = reactExports.useState(0); // the horizon, as a shift in px from its default (see HorizonControl)
     const [bg, setBg] = reactExports.useState('');
     const [eraId, setEraId] = reactExports.useState(ERAS[2].id);
     const [soundOn, setSoundOn] = reactExports.useState(true);
@@ -3806,9 +3881,11 @@ function App() {
     reactExports.useEffect(() => {
         document.documentElement.style.setProperty('--lh', String(lh));
     }, [lh]);
+    // the horizon moves the text's first baseline (--hz shifts --pin) and spreads the fade with it
     reactExports.useEffect(() => {
-        document.documentElement.style.setProperty('--seam-h', `${seamH}px`);
-    }, [seamH]);
+        document.documentElement.style.setProperty('--hz', `${hz}px`);
+        document.documentElement.style.setProperty('--seam-h', `${seamFor(hz)}px`);
+    }, [hz]);
     reactExports.useEffect(() => {
         if (bg) document.documentElement.style.setProperty('--bg', bg);
         else document.documentElement.style.removeProperty('--bg');
@@ -4371,7 +4448,7 @@ function App() {
             indexSizePt: indexPt,
             lineHeight: Math.round(lh * 100) / 100,
             background: bg || 'default',
-            seamHeight: seamH,
+            horizon: hz,
             inverted,
             soundEra: eraId,
             sound: soundOn,
@@ -4505,8 +4582,7 @@ function App() {
             if (typeof s.fontSizePt === 'number') setTextPt(clampPt(s.fontSizePt, TEXT_PT));
             if (typeof s.indexSizePt === 'number') setIndexPt(clampPt(s.indexSizePt, INDEX_PT));
             if (typeof s.lineHeight === 'number') setLh(Math.min(2, Math.max(1.1, s.lineHeight)));
-            if (typeof s.seamHeight === 'number')
-                setSeamH(Math.min(528, Math.max(88, s.seamHeight)));
+            if (typeof s.horizon === 'number') setHz(clampHz(s.horizon));
             if (typeof s.background === 'string')
                 setBg(s.background === 'default' ? '' : s.background);
             if (typeof s.inverted === 'boolean') setInverted(s.inverted);
@@ -4660,7 +4736,7 @@ function App() {
         indexPt,
         lh,
         bg,
-        seamH,
+        hz,
         inverted,
         eraId,
         soundOn,
@@ -5211,40 +5287,7 @@ function App() {
                     !onCover &&
                         jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
                             children: [
-                                jsxRuntimeExports.jsx('button', {
-                                    type: 'button',
-                                    'aria-label': 'shorter fade',
-                                    'data-tip': 'shorter fade',
-                                    disabled: seamH <= 88,
-                                    onClick: () => setSeamH((v) => v - 44),
-                                    children: jsxRuntimeExports.jsx('svg', {
-                                        width: '14',
-                                        height: '14',
-                                        viewBox: '0 0 14 14',
-                                        'aria-hidden': 'true',
-                                        children: jsxRuntimeExports.jsx('path', {
-                                            d: 'M3.8 4.6 10.2 7 3.8 9.4 Z',
-                                            fill: 'currentColor',
-                                        }),
-                                    }),
-                                }),
-                                jsxRuntimeExports.jsx('button', {
-                                    type: 'button',
-                                    'aria-label': 'taller fade',
-                                    'data-tip': 'taller fade',
-                                    disabled: seamH >= 528,
-                                    onClick: () => setSeamH((v) => v + 44),
-                                    children: jsxRuntimeExports.jsx('svg', {
-                                        width: '14',
-                                        height: '14',
-                                        viewBox: '0 0 14 14',
-                                        'aria-hidden': 'true',
-                                        children: jsxRuntimeExports.jsx('path', {
-                                            d: 'M3 2.8 11 7 3 11.2 Z',
-                                            fill: 'currentColor',
-                                        }),
-                                    }),
-                                }),
+                                jsxRuntimeExports.jsx(HorizonControl, { value: hz, onSet: setHz }),
                                 jsxRuntimeExports.jsx(FacePicker, {
                                     slot: 'body',
                                     uploads: uploads,
