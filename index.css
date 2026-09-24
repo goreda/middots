@@ -1016,35 +1016,53 @@ s.ov {
     text-indent: -1.25em;
 }
 
-/* ---- the reader's own fonts: first shelf of the face list ---- */
-.face-upload {
-    font-style: italic;
-    opacity: 0.8;
+/* ---- the owner's fonts: the upload button, then his fonts as the first shelf of the face list ----
+   Every entry keeps the list's size and right edge; the × sits to the left of a name */
+.controls .face-choice.face-upload {
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    padding: 2px 12px;
+    margin-bottom: 6px;
+    font-family: var(--font-mono); /* the interface face, like the other labels */
+    color: var(--dim);
+}
+.controls .face-choice.face-upload:hover,
+.controls .face-choice.face-upload:focus-visible {
+    color: var(--ink);
+    border-color: var(--dim);
 }
 .face-upload-note {
-    margin: 0 0 0.3em;
+    margin: 0 0 4px;
     font-size: 11px;
     line-height: 1.3;
-    opacity: 0.5;
+    opacity: 0.6;
+    text-align: right;
+    max-width: 180px;
 }
 .face-own {
     display: flex;
     align-items: baseline;
-    gap: 0.3em;
+    justify-content: flex-end;
+    gap: 6px;
 }
-.face-own .face-choice {
-    flex: 1;
-}
-.face-remove {
-    background: none;
+.controls .face-remove {
+    width: auto;
+    height: auto;
+    flex: none;
     border: 0;
-    color: inherit;
-    opacity: 0.4;
+    border-radius: 0;
+    background: none;
+    color: var(--dim);
+    font: inherit;
+    font-size: 11px;
+    opacity: 0.6;
     cursor: pointer;
-    padding: 0 0.2em;
+    padding: 0;
 }
-.face-remove:hover {
-    opacity: 0.9;
+.controls .face-remove:hover {
+    opacity: 1;
+    color: var(--ink);
+    background: none;
 }
 
 /* ---- main page (Cover): one centered column - project title, the · · mark, the folders ---- */

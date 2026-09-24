@@ -2193,7 +2193,6 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUp
     const listRef = reactExports.useRef(null);
     const uploadRef = reactExports.useRef(null);
     const [uploadNote, setUploadNote] = reactExports.useState('');
-    const defaultNote = 'saved in this browser only';
     reactExports.useEffect(() => {
         if (!open) return;
         FACES.forEach((f) => void loadFace(f, false));
@@ -2246,7 +2245,7 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUp
                             type: 'button',
                             className: 'face-choice face-upload',
                             onClick: () => uploadRef.current?.click(),
-                            children: 'upload a font',
+                            children: 'upload',
                         }),
                         jsxRuntimeExports.jsx('input', {
                             ref: uploadRef,
@@ -2265,16 +2264,25 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUp
                                 );
                             },
                         }),
-                        jsxRuntimeExports.jsx('p', {
-                            className: 'face-upload-note',
-                            children: uploadNote || defaultNote,
-                        }),
+                        uploadNote &&
+                            jsxRuntimeExports.jsx('p', {
+                                className: 'face-upload-note',
+                                children: uploadNote,
+                            }),
                         uploads.map((f) =>
                             jsxRuntimeExports.jsxs(
                                 'span',
                                 {
                                     className: 'face-own',
                                     children: [
+                                        !f.shared &&
+                                            jsxRuntimeExports.jsx('button', {
+                                                type: 'button',
+                                                className: 'face-remove',
+                                                'aria-label': `remove ${f.name}`,
+                                                onClick: () => onRemove(f.slug),
+                                                children: '\u00D7',
+                                            }),
                                         jsxRuntimeExports.jsx('button', {
                                             type: 'button',
                                             className: `face-choice${f.slug === value ? ' current' : ''}`,
@@ -2288,14 +2296,6 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUp
                                             },
                                             children: f.name,
                                         }),
-                                        !f.shared &&
-                                            jsxRuntimeExports.jsx('button', {
-                                                type: 'button',
-                                                className: 'face-remove',
-                                                'aria-label': `remove ${f.name}`,
-                                                onClick: () => onRemove(f.slug),
-                                                children: '\u00D7',
-                                            }),
                                     ],
                                 },
                                 f.slug,
