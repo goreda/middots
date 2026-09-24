@@ -14,9 +14,10 @@
  *
  * How strong is this (honestly)
  *   A bucket is exactly as private as its code. A 4-digit code is one of 10,000; a
- *   short code can be found by guessing. The service slows guessing down - every
- *   address gets 10 tries per 15 minutes (the wait doubles each time it runs out),
- *   and after 300 lookups of unknown codes in an hour from anywhere, joining pauses
+ *   short code can be found by guessing. The service slows guessing down - only misses
+ *   count (a code that does not exist, asked without claiming): 10 per hour per address,
+ *   then a 15 minute wait that doubles each time (at most a day); joining a real code or
+ *   claiming a new one never counts - and after 300 lookups of unknown codes in an hour from anywhere, joining pauses
  *   for everyone for an hour - but a longer code is the real protection.
  *   Stored data is encrypted (AES-GCM) with a key made from DATA_KEY and the code, so
  *   the storage alone is unreadable; for a short code that encryption is only as
@@ -153,6 +154,11 @@ async function forCode(env: Env, code: string) {
 
 /* ---- join: claim a new code or join an existing one, with guessing limits ---- */
 interface Lock { tries: number; until: number; strikes: number }
+/* per address: only misses count - a code that does not exist, asked without claiming. Joining a real
+   code or claiming a new one costs nothing, so moving between browsers never locks anyone out.
+   10 misses within an hour, then a wait: 15 minutes, doubling on each lockout, at most a day. */
+interface Misses { misses: number; since: number; until: number; strikes: number }
+const MISS_LIMIT = 10, MISS_WINDOW = 60 * 60_000, LOCK_BASE = 15 * 60_000, LOCK_MAX = 24 * 60 * 60_000;
 // any typable sign: letters, digits, symbols, spaces, any script or emoji; only control characters are out.
 // Length counts characters (code points): exactly 4.
 const CODE_OK = (c: unknown): c is string => typeof c === 'string' && !/[\u0000-\u001f\u007f]/.test(c) && Array.from(c).length === 4;
@@ -160,7 +166,9 @@ const CODE_OK = (c: unknown): c is string => typeof c === 'string' && !/[\u0000-
 async function join(env: Env, req: Request, h: Record<string, string>) {
     const ip = req.headers.get('CF-Connecting-IP') ?? 'unknown';
     const now = Date.now();
-    const mine: Lock = (await env.SYNC.get(`lock:${ip}`, 'json')) ?? { tries: 0, until: 0, strikes: 0 };
+    const stored = (await env.SYNC.get(`miss:${ip}`, 'json')) as Misses | null;
+    const mine: Misses = stored ?? { misses: 0, since: now, until: 0, strikes: 0 };
+    if (now - mine.since > MISS_WINDOW) { mine.misses = 0; mine.since = now; } // a fresh hour
     const all: Lock = (await env.SYNC.get('lock:all', 'json')) ?? { tries: 0, until: 0, strikes: 0 };
     const wait = Math.max(mine.until, all.until) - now;
     if (wait > 0) return json({ error: 'locked', retryInSeconds: Math.ceil(wait / 1000) }, 429, h);
@@ -168,15 +176,19 @@ async function join(env: Env, req: Request, h: Record<string, string>) {
     const { code, claim } = (await req.json().catch(() => ({}))) as { code?: string; claim?: boolean };
     if (!CODE_OK(code)) return json({ error: 'a code is exactly 4 characters' }, 400, h);
 
-    // every attempt from this address counts; 10 per window, then a wait that doubles
-    mine.tries++;
-    if (mine.tries >= 10) { mine.strikes++; mine.until = now + 15 * 60_000 * 2 ** (mine.strikes - 1); mine.tries = 0; }
-    await env.SYNC.put(`lock:${ip}`, JSON.stringify(mine), { expirationTtl: 7 * 86400 });
-
     const { bucket, token } = await forCode(env, code);
     const exists = (await env.SYNC.get(`b:${bucket}:claimed`)) !== null;
     if (!exists && !claim) {
-        // an unknown code: count it overall, so wide guessing pauses joining for an hour
+        // a miss: count it for this address (see Misses) ...
+        mine.misses++;
+        if (mine.misses >= MISS_LIMIT) {
+            mine.strikes++;
+            mine.until = now + Math.min(LOCK_MAX, LOCK_BASE * 2 ** (mine.strikes - 1));
+            mine.misses = 0; mine.since = now;
+        }
+        // strikes are forgotten a day after the last miss
+        await env.SYNC.put(`miss:${ip}`, JSON.stringify(mine), { expirationTtl: 86400 });
+        // ... and overall, so wide guessing from many addresses pauses joining for an hour
         all.tries++;
         if (all.tries >= 300) { all.until = now + 60 * 60_000; all.tries = 0; }
         await env.SYNC.put('lock:all', JSON.stringify(all), { expirationTtl: 3600 });

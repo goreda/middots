@@ -903,10 +903,7 @@ async function join(code, claim = false) {
         if (r.status === 404 && j.exists === false)
             return { ok: false, unknown: true, error: 'new code' };
         if (r.status === 429)
-            return {
-                ok: false,
-                error: `too many tries, wait ${Math.ceil(j.retryInSeconds / 60)} min`,
-            };
+            return { ok: false, error: `wait ${Math.ceil(j.retryInSeconds / 60)} min` };
         if (!r.ok) return { ok: false, error: j.error ?? `error ${r.status}` };
         write(TOKEN_KEY, j.token);
         write(REV_KEY, '0'); // nothing pulled yet: the first pull always applies
@@ -926,8 +923,7 @@ async function changeCode(code, progress) {
             body: JSON.stringify({ code, ...extra }),
         });
         const j = await r.json().catch(() => ({}));
-        if (r.status === 429)
-            throw new Error(`too many tries, wait ${Math.ceil(j.retryInSeconds / 60)} min`);
+        if (r.status === 429) throw new Error(`wait ${Math.ceil(j.retryInSeconds / 60)} min`);
         if (!r.ok) throw new Error(j.error ?? `error ${r.status}`);
         return j;
     };

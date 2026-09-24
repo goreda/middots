@@ -1472,6 +1472,13 @@ s.ov {
     color: var(--dim);
     text-align: right;
 }
+/* under the code, a note keeps to the code's own width (the four boxes: 4 x 20px + 3 x 5px), so a message
+   never widens the panel or pushes its grid apart; a longer one wraps inside that column */
+.sync-form .sync-note {
+    width: calc(4 * 20px + 3 * 5px);
+    max-width: none;
+    overflow-wrap: anywhere;
+}
 
 /* ---- past selves: a piece's snapshots, folded under its text in draft mode ---- */
 .past {
