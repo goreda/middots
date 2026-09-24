@@ -3401,7 +3401,10 @@ function App() {
             sentinel.remove();
         };
     }, []);
-    // platen: the line being typed holds at the pin line; the page rolls under it
+    // platen: the line being typed holds on the horizon - the line where a piece's text begins, right
+    // under its sticky head (the same line the folder list sits on) - and the page rolls under it.
+    // Steady by construction: the caret is snapped to its paragraph's line grid, so glyph height,
+    // empty lines and wraps can't nudge the target, and the roll is instant (no easing to wobble).
     const platenFollow = () => {
         const sc = scrollerRef.current;
         const sel = window.getSelection();
@@ -3409,19 +3412,31 @@ function App() {
         const r = sel.getRangeAt(0);
         const host =
             r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
-        if (!host || !host.closest('.story-text.editable')) return;
-        let rect = r.getClientRects()[0];
-        if (!rect || (rect.top === 0 && rect.height === 0)) rect = host.getBoundingClientRect();
-        const line = parseFloat(getComputedStyle(host).lineHeight) || 30;
-        const caretMid = rect.top + rect.height / 2;
-        const pinY =
-            parseFloat(getComputedStyle(document.querySelector('.page')).paddingTop) + line / 2;
-        const delta = caretMid - pinY;
-        if (Math.abs(delta) < 2) return;
-        sc.scrollTo({
-            top: sc.scrollTop + delta,
-            behavior: Math.abs(delta) > line * 3 ? 'auto' : 'smooth',
-        });
+        const body = host?.closest('.story-text.editable');
+        if (!host || !body) return;
+        // the caret's paragraph (a direct child of the body); an empty body counts as its own paragraph
+        let para = host;
+        while (para.parentElement && para.parentElement !== body && para !== body)
+            para = para.parentElement;
+        const line = parseFloat(getComputedStyle(body).lineHeight) || 30;
+        const pTop = para.getBoundingClientRect().top;
+        const rect = r.getClientRects()[0];
+        const mid = rect && rect.height ? rect.top + rect.height / 2 : pTop + line / 2;
+        const lineTop = pTop + Math.max(0, Math.floor((mid - pTop) / line)) * line;
+        // the horizon: where this piece's first text line sits under its head when the head is pinned
+        // (the story starts at the pin line; its first text line sits this far below the story's top -
+        // zero on a wide screen where the head stands beside the text, head + gap on a phone). Both
+        // scroll together, so the distance is layout, not scroll, and the target never drifts.
+        const story = body.closest('.story');
+        const first = body.firstElementChild ?? body;
+        const pin = parseFloat(getComputedStyle(document.querySelector('.page')).paddingTop) || 0;
+        const horizon =
+            pin +
+            (story ? first.getBoundingClientRect().top - story.getBoundingClientRect().top : 0);
+        // sub-pixel: line heights are fractional, so rounding each roll would let a pixel of error creep in
+        const delta = lineTop - horizon;
+        if (Math.abs(delta) < 0.5) return;
+        sc.scrollTo({ top: sc.scrollTop + delta, behavior: 'auto' });
     };
     reactExports.useEffect(() => {
         document.documentElement.classList.toggle('platen', platen && mode === 'draft');

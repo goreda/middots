@@ -831,10 +831,8 @@ s.ov {
     opacity: 0.18;
 }
 
-/* platen mode: the typing line holds at a fixed height, the page rolls under it */
-:root.platen {
-    --pin: calc(var(--vt) + max(190px, 44vh));
-}
+/* platen mode: the typing line holds on the horizon (App.tsx platenFollow), the page rolls under it;
+   the deep bottom padding lets the last line reach the horizon */
 :root.platen .page {
     padding-bottom: 70vh;
 }
