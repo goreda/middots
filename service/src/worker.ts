@@ -29,6 +29,7 @@
  *   b:<bucket>:font:<slug>    one uploaded font (bytes)
  *   b:<bucket>:archive        the reader's pieces (pieces.json shape)
  *   b:<bucket>:audio:<file>   a recording's size and slicing; :audio:<file>:<i> holds slice i
+ *   b:<bucket>:moved          set when the code was changed: the bucket's tokens are refused
  *   lock:<ip>, lock:all       guessing limits (expire on their own)
  *
  * Endpoints (JSON; everything but /join needs "Authorization: Bearer <token>")
@@ -45,6 +46,16 @@
  *   GET    /audio/<file>?t=<token>   a recording, in 1 MB slices (HTTP Range, 206). The token rides in the
  *                           query because an <audio> element can't send headers; no Origin is needed here
  *   PUT    /audio/<file>/<i>    one encrypted 1 MB slice; PUT /audio/<file> {size, chunk, n} finishes it
+ *   POST   /rekey/start     {code} -> {keys: n}; 409 when the new code is taken
+ *   POST   /rekey/move      {code, i} -> moves entry i (decrypt with the old key, encrypt with the new)
+ *   POST   /rekey/finish    {code} -> {token}; the old code stops working, other devices are signed out
+ *
+ * Changing the code
+ *   The bucket's name and its encryption key both come from the code, so a new code means a new
+ *   bucket: every entry is re-encrypted into it and the old one is deleted. The page drives it one
+ *   entry per request (a recording slice is 1 MB) so no request runs past the Worker's time limit.
+ *   The old bucket keeps only a "moved" marker, and a token for a moved bucket is refused, so the
+ *   old code's devices are signed out. (Claiming the old code again later clears the marker.)
  *
  * Private archive
  *   The published pieces and their recordings are not in the public site. They live in the owner's
@@ -102,6 +113,8 @@ interface Device { bucket: string; key: CryptoKey }
 async function device(env: Env, req: Request, token?: string): Promise<Device | null> {
     const [bucket, k, sig] = (token ?? (req.headers.get('Authorization') ?? '').replace(/^Bearer /, '')).split('.');
     if (!bucket || !k || !sig || !same(sig, await hmacHex(env.TOKEN_SECRET, `${bucket}.${k}`))) return null;
+    // a changed code leaves a "moved" marker on its old bucket; tokens for it stop working here
+    if ((await env.SYNC.get(`b:${bucket}:moved`)) !== null) return null;
     return { bucket, key: await crypto.subtle.importKey('raw', unb64(k.replace(/-/g, '+').replace(/_/g, '/')), 'AES-GCM', false, ['encrypt', 'decrypt']) };
 }
 async function bucketKeyBytes(env: Env, code: string) {
@@ -129,6 +142,15 @@ async function putJson(env: Env, d: Device, key: string, value: unknown) {
     await env.SYNC.put(`b:${d.bucket}:${key}`, await seal(d, enc.encode(JSON.stringify(value)).buffer as ArrayBuffer));
 }
 
+/* the bucket name, key and token for a code */
+async function forCode(env: Env, code: string) {
+    const bucket = (await hmacHex(env.CODE_SECRET, 'bucket:' + code)).slice(0, 32);
+    const raw = await bucketKeyBytes(env, code);
+    const k = b64(raw.buffer as ArrayBuffer).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const key = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+    return { bucket, key, token: `${bucket}.${k}.${await hmacHex(env.TOKEN_SECRET, `${bucket}.${k}`)}` };
+}
+
 /* ---- join: claim a new code or join an existing one, with guessing limits ---- */
 interface Lock { tries: number; until: number; strikes: number }
 const CODE = /^[A-Za-z0-9]{4,64}$/;
@@ -149,7 +171,7 @@ async function join(env: Env, req: Request, h: Record<string, string>) {
     if (mine.tries >= 10) { mine.strikes++; mine.until = now + 15 * 60_000 * 2 ** (mine.strikes - 1); mine.tries = 0; }
     await env.SYNC.put(`lock:${ip}`, JSON.stringify(mine), { expirationTtl: 7 * 86400 });
 
-    const bucket = (await hmacHex(env.CODE_SECRET, 'bucket:' + code)).slice(0, 32);
+    const { bucket, token } = await forCode(env, code);
     const exists = (await env.SYNC.get(`b:${bucket}:claimed`)) !== null;
     if (!exists && !claim) {
         // an unknown code: count it overall, so wide guessing pauses joining for an hour
@@ -158,9 +180,11 @@ async function join(env: Env, req: Request, h: Record<string, string>) {
         await env.SYNC.put('lock:all', JSON.stringify(all), { expirationTtl: 3600 });
         return json({ exists: false }, 404, h);
     }
-    if (!exists) await env.SYNC.put(`b:${bucket}:claimed`, String(now));
-    const k = b64((await bucketKeyBytes(env, code)).buffer as ArrayBuffer).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    return json({ token: `${bucket}.${k}.${await hmacHex(env.TOKEN_SECRET, `${bucket}.${k}`)}`, created: !exists }, 200, h);
+    if (!exists) {
+        await env.SYNC.put(`b:${bucket}:claimed`, String(now));
+        await env.SYNC.delete(`b:${bucket}:moved`); // a code given up earlier starts clean
+    }
+    return json({ token, created: !exists }, 200, h);
 }
 
 /* ---- the state document ---- */
@@ -262,6 +286,54 @@ async function getAudio(env: Env, d: Device, req: Request, file: string) {
     });
 }
 
+/* ---- changing the code ---- */
+/* every entry of a bucket except its claim marker, in a stable order */
+async function entries(env: Env, bucket: string) {
+    const names: string[] = [];
+    let cursor: string | undefined;
+    do {
+        const page = await env.SYNC.list({ prefix: `b:${bucket}:`, cursor });
+        names.push(...page.keys.map((k) => k.name.slice(bucket.length + 3)).filter((n) => n !== 'claimed' && n !== 'moved'));
+        cursor = page.list_complete ? undefined : page.cursor;
+    } while (cursor);
+    return names.sort();
+}
+
+async function rekey(env: Env, d: Device, req: Request, step: string, h: Record<string, string>) {
+    const { code, i } = (await req.json().catch(() => ({}))) as { code?: string; i?: number };
+    if (typeof code !== 'string' || !CODE.test(code)) return json({ error: 'a code is 4 to 64 letters or digits' }, 400, h);
+    const next = await forCode(env, code);
+    if (next.bucket === d.bucket) return json({ error: 'that is already the code' }, 400, h);
+    const names = await entries(env, d.bucket);
+    if (step === 'start') {
+        // asking whether a code is free is a guess too: it counts against the same per-address limit as /join
+        const ip = req.headers.get('CF-Connecting-IP') ?? 'unknown';
+        const now = Date.now();
+        const mine: Lock = (await env.SYNC.get(`lock:${ip}`, 'json')) ?? { tries: 0, until: 0, strikes: 0 };
+        if (mine.until > now) return json({ error: 'locked', retryInSeconds: Math.ceil((mine.until - now) / 1000) }, 429, h);
+        mine.tries++;
+        if (mine.tries >= 10) { mine.strikes++; mine.until = now + 15 * 60_000 * 2 ** (mine.strikes - 1); mine.tries = 0; }
+        await env.SYNC.put(`lock:${ip}`, JSON.stringify(mine), { expirationTtl: 7 * 86400 });
+        // the new code must be free: nobody may be moved into someone else's bucket
+        if ((await env.SYNC.get(`b:${next.bucket}:claimed`)) !== null) return json({ error: 'that code is taken' }, 409, h);
+        return json({ keys: names.length }, 200, h);
+    }
+    if (step === 'move') {
+        const name = typeof i === 'number' ? names[i] : undefined;
+        if (!name) return json({ error: 'no such entry' }, 400, h);
+        const raw = await env.SYNC.get(`b:${d.bucket}:${name}`, 'arrayBuffer');
+        if (raw) await env.SYNC.put(`b:${next.bucket}:${name}`, await seal({ bucket: next.bucket, key: next.key }, await unseal(d, raw)));
+        return json({ ok: true }, 200, h);
+    }
+    // finish: claim the new bucket, then remove the old one (its tokens stop working with the claim marker)
+    if ((await env.SYNC.get(`b:${next.bucket}:claimed`)) !== null) return json({ error: 'that code is taken' }, 409, h);
+    await env.SYNC.put(`b:${next.bucket}:claimed`, String(Date.now()));
+    await env.SYNC.put(`b:${d.bucket}:moved`, String(Date.now()));
+    await env.SYNC.delete(`b:${d.bucket}:claimed`);
+    for (const name of names) await env.SYNC.delete(`b:${d.bucket}:${name}`);
+    return json({ token: next.token }, 200, h);
+}
+
 /* ---- routing ---- */
 export default {
     async fetch(req: Request, env: Env): Promise<Response> {
@@ -283,6 +355,8 @@ export default {
         if (path === '/state' && req.method === 'PUT') return putState(env, d, req, h);
         const m = path.match(/^\/fonts(?:\/([^/]+))?$/);
         if (m) return fonts(env, d, req, m[1] ?? '', h);
+        const rk = path.match(/^\/rekey\/(start|move|finish)$/);
+        if (rk && req.method === 'POST') return rekey(env, d, req, rk[1], h);
         if (path === '/archive' && (req.method === 'GET' || req.method === 'PUT')) return archive(env, d, req, h);
         const up = path.match(/^\/audio\/([^/]+)(?:\/(\d+))?$/);
         if (up && req.method === 'PUT') return putAudio(env, d, req, up[1], up[2], h);

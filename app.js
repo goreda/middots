@@ -919,6 +919,44 @@ function leave() {
     write(TOKEN_KEY, '');
     write(REV_KEY, '');
 }
+async function changeCode(code, progress) {
+    const step = async (name, extra = {}) => {
+        const r = await call(`/rekey/${name}`, {
+            method: 'POST',
+            body: JSON.stringify({ code, ...extra }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (r.status === 429)
+            throw new Error(`too many tries, wait ${Math.ceil(j.retryInSeconds / 60)} min`);
+        if (!r.ok) throw new Error(j.error ?? `error ${r.status}`);
+        return j;
+    };
+    try {
+        await pushNow(); // nothing unsent is left behind on the old code
+        const { keys } = await step('start');
+        for (let i = 0; i < keys; i++) {
+            progress(i, keys);
+            await step('move', { i });
+        }
+        progress(keys, keys);
+        const { token: next } = await step('finish');
+        write(TOKEN_KEY, next);
+        return { ok: true };
+    } catch (e) {
+        return {
+            ok: false,
+            error:
+                e instanceof Error && e.message !== 'Failed to fetch'
+                    ? e.message
+                    : 'the sync service did not answer',
+        };
+    }
+}
+/* the page tells sync what to do when this device's code stops working (changed elsewhere) */
+let onGone = () => {};
+function onSignedOut(f) {
+    onGone = f;
+}
 /* the service's copy, when it is newer than what this device last saw; null otherwise */
 async function pull() {
     if (!isJoined()) return null;
@@ -926,8 +964,9 @@ async function pull() {
         const r = await call('/state', { cache: 'no-store' });
         if (r.status === 401) {
             leave();
+            onGone();
             return null;
-        }
+        } // the code was changed on another device
         if (!r.ok) return null;
         const j = await r.json();
         if (!j.state || j.rev <= knownRev()) return null;
@@ -2689,22 +2728,122 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUp
  * SyncControl - join this device to the sync service with a code (sync.ts).
  * The first device to use a code claims it (asked once); later devices type the same code.
  */
-function SyncControl({ onJoined, onLeft }) {
+/* ---- the code field: one small box per character ----
+   A real (invisible) input lies over the boxes, so typing, pasting, the phone keyboard and password
+   managers all work as usual; the boxes only draw it. Each character shows for a moment, then turns
+   into a middot. Letters and digits both count; a code is 4 to 64 of them. */
+const PIN_MIN = 4;
+const PIN_MAX = 64;
+function PinField({ value, onChange, onEnter, label, shake }) {
+    const [focused, setFocused] = reactExports.useState(false);
+    const [shown, setShown] = reactExports.useState(-1); // index of the character still visible, or -1
+    const [shaking, setShaking] = reactExports.useState(false); // a refused code: the boxes shake once
+    const inputRef = reactExports.useRef(null);
+    reactExports.useEffect(() => {
+        inputRef.current?.focus();
+    }, []);
+    reactExports.useEffect(() => {
+        if (!shake) return;
+        setShaking(true);
+        const t = window.setTimeout(() => setShaking(false), 380);
+        return () => window.clearTimeout(t);
+    }, [shake]);
+    reactExports.useEffect(() => {
+        if (shown < 0) return;
+        const t = window.setTimeout(() => setShown(-1), 260);
+        return () => window.clearTimeout(t);
+    }, [shown, value]);
+    // the boxes: every typed character, plus the next empty one, never fewer than four
+    const boxes = Math.min(PIN_MAX, Math.max(PIN_MIN, value.length + 1));
+    const active = Math.min(value.length, PIN_MAX - 1);
+    return jsxRuntimeExports.jsxs('div', {
+        className: `pin${shaking ? ' pin-shake' : ''}`,
+        onClick: () => inputRef.current?.focus(),
+        children: [
+            jsxRuntimeExports.jsx('input', {
+                ref: inputRef,
+                className: 'pin-input',
+                'aria-label': label,
+                autoComplete: 'off',
+                autoCapitalize: 'off',
+                autoCorrect: 'off',
+                spellCheck: false,
+                maxLength: PIN_MAX,
+                value: value,
+                onFocus: () => setFocused(true),
+                onBlur: () => setFocused(false),
+                onKeyDown: (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        onEnter();
+                    }
+                },
+                onChange: (e) => {
+                    const v = e.target.value.replace(/[^A-Za-z0-9]/g, '').slice(0, PIN_MAX);
+                    setShown(v.length > value.length ? v.length - 1 : -1); // only a freshly typed character shows
+                    onChange(v);
+                },
+            }),
+            jsxRuntimeExports.jsx('div', {
+                className: 'pin-boxes',
+                'aria-hidden': 'true',
+                children: Array.from({ length: boxes }, (_, i) => {
+                    const ch = value[i];
+                    const cls = [
+                        'pin-box',
+                        ch ? 'filled' : '',
+                        focused && i === active && value.length < PIN_MAX ? 'active' : '',
+                    ].join(' ');
+                    return jsxRuntimeExports.jsx(
+                        'span',
+                        {
+                            className: cls,
+                            children: ch
+                                ? i === shown
+                                    ? jsxRuntimeExports.jsx('span', {
+                                          className: 'pin-char',
+                                          children: ch,
+                                      })
+                                    : jsxRuntimeExports.jsx('span', {
+                                          className: 'pin-dot',
+                                          children: '\u00b7',
+                                      })
+                                : null,
+                        },
+                        i,
+                    );
+                }),
+            }),
+        ],
+    });
+}
+function SyncControl({ onJoined, onLeft, onRekeyed }) {
     const [open, setOpen] = reactExports.useState(false);
     const [code, setCode] = reactExports.useState('');
+    const [first, setFirst] = reactExports.useState(''); // a new code, waiting to be typed again
     const [note, setNote] = reactExports.useState('');
     const [askClaim, setAskClaim] = reactExports.useState(false);
     const [joined, setJoined] = reactExports.useState(isJoined());
+    const [mode, setMode] = reactExports.useState('idle'); // changing the code
+    const [shake, setShake] = reactExports.useState(0);
+    const nope = (msg) => {
+        setNote(msg);
+        setShake((n) => n + 1);
+    };
     const go = async (claim) => {
+        if (code.length < PIN_MIN) {
+            nope('at least 4');
+            return;
+        }
         setNote('\u2026');
-        const r = await join(code.trim(), claim);
+        const r = await join(code, claim);
         if (r.ok) {
             setJoined(true);
             setCode('');
             setAskClaim(false);
             setNote(r.created ? 'code claimed, synced' : 'joined, synced');
             await loadPrivate();
-            onJoined();
+            await onJoined();
             return;
         }
         if (r.unknown) {
@@ -2712,21 +2851,60 @@ function SyncControl({ onJoined, onLeft }) {
             setNote('nobody uses this code yet. make it yours?');
             return;
         }
-        setNote(r.error);
+        nope(r.error);
+    };
+    const next = async () => {
+        if (code.length < PIN_MIN) {
+            nope('at least 4');
+            return;
+        }
+        if (mode === 'new') {
+            setFirst(code);
+            setCode('');
+            setMode('again');
+            setNote('type it once more');
+            return;
+        }
+        if (code !== first) {
+            setCode('');
+            setFirst('');
+            setMode('new');
+            nope('they didn\u2019t match. new code');
+            return;
+        }
+        setMode('busy');
+        setNote('moving\u2026');
+        const r = await changeCode(code, (done, total) => setNote(`moving ${done}/${total}`));
+        setCode('');
+        setFirst('');
+        if (!r.ok) {
+            setMode('new');
+            nope(r.error);
+            return;
+        }
+        await onRekeyed();
+        setMode('idle');
+        setNote('code changed. other devices need the new one');
+    };
+    const cancel = () => {
+        setMode('idle');
+        setCode('');
+        setFirst('');
+        setNote('');
     };
     const panelRef = reactExports.useRef(null);
     // same placement as the type shelf, redone whenever the panel's content changes size
     reactExports.useEffect(() => {
         const list = panelRef.current;
         if (open && list && list.parentElement) placePanel(list, list.parentElement);
-    }, [open, note, joined, askClaim]);
+    }, [open, note, joined, askClaim, mode, code.length]);
     reactExports.useEffect(() => {
         if (!open) return;
         const onDoc = (e) => {
-            if (!e.target.closest('.sync-widget')) setOpen(false);
+            if (mode !== 'busy' && !e.target.closest('.sync-widget')) setOpen(false);
         };
         const onKey = (e) => {
-            if (e.key === 'Escape') setOpen(false);
+            if (e.key === 'Escape' && mode !== 'busy') setOpen(false);
         };
         document.addEventListener('mousedown', onDoc);
         document.addEventListener('keydown', onKey);
@@ -2734,75 +2912,142 @@ function SyncControl({ onJoined, onLeft }) {
             document.removeEventListener('mousedown', onDoc);
             document.removeEventListener('keydown', onKey);
         };
+    }, [open, mode]);
+    // a closed panel forgets a half-typed code
+    reactExports.useEffect(() => {
+        if (!open && mode !== 'busy') {
+            setCode('');
+            setFirst('');
+            setAskClaim(false);
+            if (mode !== 'idle') setMode('idle');
+        }
     }, [open]);
     const label = joined ? 'synced' : 'sync';
     return jsxRuntimeExports.jsxs('div', {
         className: 'face-widget sync-widget',
         children: [
             open &&
-                jsxRuntimeExports.jsx('div', {
+                jsxRuntimeExports.jsxs('div', {
                     className: 'face-list sync-panel',
                     ref: panelRef,
-                    children: joined
-                        ? jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
-                              children: [
-                                  jsxRuntimeExports.jsx('p', {
-                                      className: 'sync-note',
-                                      children: note || 'this device is synced',
-                                  }),
-                                  jsxRuntimeExports.jsx('button', {
-                                      type: 'button',
-                                      className: 'face-choice',
-                                      onClick: () => {
-                                          // leaving resets this device to a fresh page; asked once, since it can't be undone here
-                                          if (
-                                              !window.confirm(
-                                                  'leave sync? this device starts fresh: its drafts, folders, settings and fonts are cleared here. they stay safe on the code for your other devices.',
-                                              )
-                                          )
-                                              return;
-                                          leave();
-                                          clearPrivate();
-                                          onLeft();
-                                      },
-                                      children: 'leave',
-                                  }),
-                              ],
-                          })
-                        : jsxRuntimeExports.jsxs('form', {
-                              onSubmit: (e) => {
-                                  e.preventDefault();
-                                  void go(askClaim);
-                              },
-                              children: [
-                                  jsxRuntimeExports.jsx('input', {
-                                      className: 'sync-code',
-                                      'aria-label': 'sync code',
-                                      placeholder: 'code',
-                                      autoComplete: 'off',
-                                      autoCapitalize: 'off',
-                                      spellCheck: false,
-                                      maxLength: 64,
-                                      value: code,
-                                      onChange: (e) => {
-                                          setCode(e.target.value.replace(/[^A-Za-z0-9]/g, ''));
-                                          setAskClaim(false);
-                                          setNote('');
-                                      },
-                                  }),
-                                  jsxRuntimeExports.jsx('button', {
-                                      type: 'submit',
-                                      className: 'face-choice face-upload',
-                                      disabled: code.trim().length < 4,
-                                      children: askClaim ? 'make it mine' : 'join',
-                                  }),
-                                  note &&
-                                      jsxRuntimeExports.jsx('p', {
-                                          className: 'sync-note',
-                                          children: note,
-                                      }),
-                              ],
-                          }),
+                    children: [
+                        joined &&
+                            mode === 'idle' &&
+                            jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
+                                children: [
+                                    jsxRuntimeExports.jsx('p', {
+                                        className: 'sync-note',
+                                        children: note || 'this device is synced',
+                                    }),
+                                    jsxRuntimeExports.jsx('button', {
+                                        type: 'button',
+                                        className: 'face-choice',
+                                        onClick: () => {
+                                            setMode('new');
+                                            setNote('new code');
+                                        },
+                                        children: 'change code',
+                                    }),
+                                    jsxRuntimeExports.jsx('button', {
+                                        type: 'button',
+                                        className: 'face-choice',
+                                        onClick: () => {
+                                            // leaving resets this device to a fresh page; asked once, since it can't be undone here
+                                            if (
+                                                !window.confirm(
+                                                    'leave sync? this device starts fresh: its drafts, folders, settings and fonts are cleared here. they stay safe on the code for your other devices.',
+                                                )
+                                            )
+                                                return;
+                                            leave();
+                                            clearPrivate();
+                                            onLeft();
+                                        },
+                                        children: 'leave',
+                                    }),
+                                ],
+                            }),
+                        joined &&
+                            mode !== 'idle' &&
+                            jsxRuntimeExports.jsxs('form', {
+                                className: 'sync-form',
+                                onSubmit: (e) => {
+                                    e.preventDefault();
+                                    if (mode !== 'busy') void next();
+                                },
+                                children: [
+                                    mode !== 'busy' &&
+                                        jsxRuntimeExports.jsx(
+                                            PinField,
+                                            {
+                                                value: code,
+                                                onChange: (v) => {
+                                                    setCode(v);
+                                                },
+                                                onEnter: () => void next(),
+                                                label:
+                                                    mode === 'new' ? 'new code' : 'new code again',
+                                                shake: shake,
+                                            },
+                                            mode,
+                                        ),
+                                    jsxRuntimeExports.jsx('p', {
+                                        className: 'sync-note',
+                                        children: note,
+                                    }),
+                                    mode !== 'busy' &&
+                                        jsxRuntimeExports.jsxs('div', {
+                                            className: 'sync-actions',
+                                            children: [
+                                                jsxRuntimeExports.jsx('button', {
+                                                    type: 'button',
+                                                    className: 'face-choice',
+                                                    onClick: cancel,
+                                                    children: 'back',
+                                                }),
+                                                jsxRuntimeExports.jsx('button', {
+                                                    type: 'submit',
+                                                    className: 'face-choice face-upload',
+                                                    disabled: code.length < PIN_MIN,
+                                                    children: mode === 'new' ? 'next' : 'change',
+                                                }),
+                                            ],
+                                        }),
+                                ],
+                            }),
+                        !joined &&
+                            jsxRuntimeExports.jsxs('form', {
+                                className: 'sync-form',
+                                onSubmit: (e) => {
+                                    e.preventDefault();
+                                    void go(askClaim);
+                                },
+                                children: [
+                                    jsxRuntimeExports.jsx(PinField, {
+                                        value: code,
+                                        onChange: (v) => {
+                                            setCode(v);
+                                            setAskClaim(false);
+                                            setNote('');
+                                        },
+                                        onEnter: () => void go(askClaim),
+                                        label: 'sync code',
+                                        shake: shake,
+                                    }),
+                                    jsxRuntimeExports.jsx('button', {
+                                        type: 'submit',
+                                        className: 'face-choice face-upload',
+                                        disabled: code.length < PIN_MIN,
+                                        children: askClaim ? 'make it mine' : 'join',
+                                    }),
+                                    note &&
+                                        jsxRuntimeExports.jsx('p', {
+                                            className: 'sync-note',
+                                            children: note,
+                                        }),
+                                ],
+                            }),
+                    ],
                 }),
             jsxRuntimeExports.jsx('button', {
                 type: 'button',
@@ -3181,6 +3426,7 @@ function App() {
     }, []);
     /* a device just joined: bring in what the code already holds, else send up what this device has */
     const syncJoined = () => {
+        setShelfRev((n) => n + 1);
         void pull().then((r) => {
             if (r) applyRemote(r);
             else {
@@ -3189,6 +3435,12 @@ function App() {
             }
         });
         void shareLocalFonts().then((f) => setUploads(f));
+    };
+    // the shelf can change under the page (joining, a new code): a bump makes the page read it again
+    const [, setShelfRev] = reactExports.useState(0);
+    const syncRekeyed = async () => {
+        await loadPrivate();
+        setShelfRev((n) => n + 1);
     };
     const uploadFace = async (file) => {
         await addFontFile(file);
@@ -3625,6 +3877,7 @@ function App() {
         const saved = storeGet(STATE_KEY);
         if (saved) applySaved(saved);
         onNewer(applyRemote);
+        onSignedOut(resetDevice); // the code was changed on another device: this one goes fresh
         void pull().then((r) => {
             if (r) applyRemote(r);
         });
@@ -4292,6 +4545,7 @@ function App() {
                     jsxRuntimeExports.jsx(SyncControl, {
                         onJoined: syncJoined,
                         onLeft: resetDevice,
+                        onRekeyed: syncRekeyed,
                     }),
                 ],
             }),
