@@ -1749,7 +1749,7 @@ function Cover({ folders, count, onOpen, onCreate, onRename, onDelete }) {
                               (folders.length > 0 || editAll) &&
                                   jsxRuntimeExports.jsx('button', {
                                       type: 'button',
-                                      className: 'cover-edit',
+                                      className: editAll ? 'cover-edit' : 'cover-edit aside',
                                       onClick: () => setEditAll((v) => !v),
                                       children: editAll ? 'done' : 'edit',
                                   }),
