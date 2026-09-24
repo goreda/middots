@@ -1640,6 +1640,7 @@ function Logo() {
    name is being edited (a long press on a phone, a double-click on a desktop). Pressing it deletes
    the folder at once, no warning - the reader's call; the Instinct archive is the backup. */
 const DELETE_HOVER_MS = 4000;
+const DELETE_GRACE_MS = 900; // how long delete stays armed after the mouse leaves the row
 function FolderCount({ n, armed, title, onDelete }) {
     return armed
         ? jsxRuntimeExports.jsx('button', {
@@ -1690,6 +1691,7 @@ function Cover({ folders, count, onOpen, onCreate, onRename, onDelete }) {
                             onPointerEnter: (e) => {
                                 if (e.pointerType !== 'mouse') return;
                                 window.clearTimeout(hover.current);
+                                if (armed === f.id) return; // back inside within the grace period: still armed
                                 hover.current = window.setTimeout(
                                     () => setArmed(f.id),
                                     DELETE_HOVER_MS,
@@ -1698,7 +1700,12 @@ function Cover({ folders, count, onOpen, onCreate, onRename, onDelete }) {
                             onPointerLeave: (e) => {
                                 if (e.pointerType !== 'mouse') return;
                                 window.clearTimeout(hover.current);
-                                setArmed((a) => (a === f.id ? null : a));
+                                // a grace period: the way from the title to "delete" may cross a sliver outside
+                                // the row; coming back in before it ends (onPointerEnter) keeps delete armed
+                                hover.current = window.setTimeout(
+                                    () => setArmed((a) => (a === f.id ? null : a)),
+                                    DELETE_GRACE_MS,
+                                );
                             },
                             children: [
                                 editing === f.id
@@ -4338,6 +4345,56 @@ function App() {
         await addFontFile(file);
         setUploads([...UPLOADED]);
     };
+    /* drop a font file anywhere on the page: it goes through the same path as upload (uploads.ts) and
+       becomes the text face at once. Only font files are taken; anything else falls through untouched. */
+    const isFontFile = (f) => /\.(woff2?|ttf|otf)$/i.test(f.name) || /^font\//.test(f.type);
+    reactExports.useEffect(() => {
+        const carriesFiles = (e) => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+        let depth = 0; // dragenter/leave fire per element; count them so the hint doesn't flicker
+        const hint = (on) => document.documentElement.classList.toggle('font-dropping', on);
+        const onEnter = (e) => {
+            if (!carriesFiles(e)) return;
+            depth++;
+            hint(true);
+        };
+        const onLeave = (e) => {
+            if (!carriesFiles(e)) return;
+            depth = Math.max(0, depth - 1);
+            if (!depth) hint(false);
+        };
+        const onOver = (e) => {
+            if (carriesFiles(e)) e.preventDefault();
+        };
+        const onDrop = (e) => {
+            depth = 0;
+            hint(false);
+            const files = [...(e.dataTransfer?.files ?? [])].filter(isFontFile);
+            if (!carriesFiles(e)) return;
+            e.preventDefault(); // never let the browser open the file instead
+            void (async () => {
+                let last = null;
+                for (const f of files) {
+                    try {
+                        last = await addFontFile(f);
+                    } catch {
+                        /* not a readable font */
+                    }
+                }
+                setUploads([...UPLOADED]);
+                if (last) setBodyFace(last.slug); // the (last) dropped font is the text face now
+            })();
+        };
+        window.addEventListener('dragenter', onEnter);
+        window.addEventListener('dragleave', onLeave);
+        window.addEventListener('dragover', onOver);
+        window.addEventListener('drop', onDrop);
+        return () => {
+            window.removeEventListener('dragenter', onEnter);
+            window.removeEventListener('dragleave', onLeave);
+            window.removeEventListener('dragover', onOver);
+            window.removeEventListener('drop', onDrop);
+        };
+    }, []);
     const dropFace = (slug) => {
         void removeFont(slug).finally(() => setUploads([...UPLOADED]));
         if (bodyFace === slug) setBodyFace('eb-garamond');
