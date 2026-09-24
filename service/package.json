@@ -1,0 +1,1 @@
+{ "name": "middots-sync", "private": true, "type": "module", "devDependencies": { "wrangler": "4.38.0", "@cloudflare/workers-types": "^4.20250901.0" } }

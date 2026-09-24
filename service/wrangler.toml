@@ -1,0 +1,14 @@
+# middots sync service (see src/worker.ts for the design)
+name = "middots-sync"
+main = "src/worker.ts"
+compatibility_date = "2025-09-17"
+
+[vars]
+ALLOWED_ORIGIN = "https://goreda.github.io"
+
+# KV namespace id is filled in when the namespace is created (wrangler kv namespace create SYNC)
+[[kv_namespaces]]
+binding = "SYNC"
+id = "0037fcb5fd1f45239b7320724fb0c5a6"
+
+# secrets (never in this file): CODE_SECRET, TOKEN_SECRET, DATA_KEY - set with `wrangler secret put <NAME>`

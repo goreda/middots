@@ -1129,6 +1129,37 @@ s.ov {
     color: var(--ink);
 }
 
+/* ---- sync: code field and join button, in the same panel style as the face list ---- */
+.sync-panel form {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+}
+.sync-code {
+    width: 140px;
+    background: transparent;
+    color: var(--ink);
+    border: 0;
+    border-bottom: 1px solid var(--hairline);
+    font-family: var(--font-mono);
+    font-size: calc(13px + 1pt);
+    text-align: right;
+    padding: 2px 0;
+    outline: none;
+}
+.sync-code:focus {
+    border-bottom-color: var(--dim);
+}
+.sync-note {
+    margin: 0;
+    max-width: 170px;
+    font-size: 11px;
+    line-height: 1.35;
+    color: var(--dim);
+    text-align: right;
+}
+
 /* standalone mirror: with no host header above the page, the top fade is the
    page's own background thinning out (mask), so it follows --bg and inversion */
 .seam.standalone {

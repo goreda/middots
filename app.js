@@ -799,19 +799,180 @@ const faceBySlug = (slug) =>
     FACES.find((f) => f.slug === slug) ?? UPLOADED.find((f) => f.slug === slug);
 
 /*
- * sharing - the seam for fonts that follow the owner across devices.
+ * host - what the page is allowed to do where it runs.
  *
- * Today uploaded fonts live only in the browser they were uploaded in
- * (uploads.ts, IndexedDB). Nothing is sent anywhere, nothing goes into the repo.
- * A future sync service plugs in here: implement FontShare and hand it to
- * uploads.ts in place of LocalOnly. The picker and the browser store stay as
- * they are; shared fonts would join the same first shelf.
+ * The same source builds two fronts. The hosted archive File runs inside a
+ * sandboxed viewer frame with no storage and no downloads, so there settings and
+ * drafts live only for the visit and "save file" goes through a helper tab.
+ * The GitHub Pages mirror is a normal page: the mirror build flips STANDALONE to
+ * true, which turns on saving settings and drafts in localStorage and a direct
+ * file download for "save file".
  */
-/* the current setup: no shared store, every font stays in its browser */
-const LocalOnly = {
-    canRead: () => false,
-    list: async () => [],
-    fontUrl: () => '',
+/* localStorage key for the saved state (settings, drafts, mode) on the mirror */
+const STATE_KEY = 'middots-state';
+/* the sync service (service/ in the repo, a Cloudflare Worker); '' turns syncing off.
+   The archive File never syncs: its viewer allows no outside requests or storage. */
+const SYNC_URL = 'https://middots-sync.middots.workers.dev';
+
+/*
+ * sync - the page's side of the sync service (service/src/worker.ts in the repo).
+ *
+ * A device joins with a code the reader chooses; the first device to use a code
+ * claims it (the page asks first), later devices type the same code to join. The
+ * service answers with a token that this browser keeps, so the code is typed once.
+ *
+ * What syncs: the saved state the page already writes locally (settings, drafts,
+ * fold states, the page he was on - see "saved state" in App.tsx) and uploaded
+ * fonts (through the FontShare in sharing.ts). Saves are batched: a push goes out
+ * a few seconds after the last change and when the page is hidden, which keeps
+ * the service far under its free-plan write limit.
+ * Conflicts: each save names the version it was based on. If another device saved
+ * in between, the service refuses and hands back its copy, which this page then
+ * shows - the newest save wins. The page pulls again whenever it comes back into
+ * view, so switching devices picks up where the other left off.
+ */
+const TOKEN_KEY = 'middots-sync-token';
+const REV_KEY = 'middots-sync-rev';
+const PUSH_DELAY = 4000;
+function read(key) {
+    try {
+        return localStorage.getItem(key) ?? '';
+    } catch {
+        return '';
+    }
+}
+function write(key, v) {
+    try {
+        if (v) localStorage.setItem(key, v);
+        else localStorage.removeItem(key);
+    } catch {
+        /* no storage */
+    }
+}
+const isJoined = () => !!read(TOKEN_KEY);
+const token = () => read(TOKEN_KEY);
+const knownRev = () => Number(read(REV_KEY)) || 0;
+async function call(path, init = {}) {
+    return fetch(SYNC_URL + path, {
+        ...init,
+        headers: {
+            ...(init.headers ?? {}),
+            ...(token() ? { Authorization: `Bearer ${token()}` } : {}),
+            ...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
+        },
+    });
+}
+/* claim=false first: an unused code comes back as {unknown}, and the page asks before claiming it */
+async function join(code, claim = false) {
+    try {
+        const r = await call('/join', { method: 'POST', body: JSON.stringify({ code, claim }) });
+        const j = await r.json();
+        if (r.status === 404 && j.exists === false)
+            return { ok: false, unknown: true, error: 'new code' };
+        if (r.status === 429)
+            return {
+                ok: false,
+                error: `too many tries, wait ${Math.ceil(j.retryInSeconds / 60)} min`,
+            };
+        if (!r.ok) return { ok: false, error: j.error ?? `error ${r.status}` };
+        write(TOKEN_KEY, j.token);
+        write(REV_KEY, '0'); // nothing pulled yet: the first pull always applies
+        return { ok: true, created: j.created };
+    } catch {
+        return { ok: false, error: 'the sync service did not answer' };
+    }
+}
+function leave() {
+    write(TOKEN_KEY, '');
+    write(REV_KEY, '');
+}
+/* the service's copy, when it is newer than what this device last saw; null otherwise */
+async function pull() {
+    if (!isJoined()) return null;
+    try {
+        const r = await call('/state', { cache: 'no-store' });
+        if (r.status === 401) {
+            leave();
+            return null;
+        }
+        if (!r.ok) return null;
+        const j = await r.json();
+        if (!j.state || j.rev <= knownRev()) return null;
+        write(REV_KEY, String(j.rev));
+        pending = null; // an unsent local change based on the older copy would overwrite the newer one
+        return { rev: j.rev, state: j.state };
+    } catch {
+        return null;
+    }
+}
+let timer;
+let pending = null;
+let onRemote = () => {};
+/* the page tells sync what to do when a newer copy arrives from another device */
+function onNewer(apply) {
+    onRemote = apply;
+}
+/* called on every local save; the push itself waits for a pause */
+function schedulePush(state) {
+    if (!isJoined()) return;
+    pending = state;
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => void pushNow(), PUSH_DELAY);
+}
+async function pushNow(keepalive = false) {
+    if (!isJoined() || pending === null) return;
+    const state = pending;
+    pending = null;
+    window.clearTimeout(timer);
+    try {
+        const r = await call('/state', {
+            method: 'PUT',
+            body: JSON.stringify({ baseRev: knownRev(), state }),
+            keepalive,
+        });
+        const j = await r.json();
+        if (r.ok) write(REV_KEY, String(j.rev));
+        else if (r.status === 409) {
+            write(REV_KEY, String(j.rev));
+            onRemote({ rev: j.rev, state: j.state });
+        }
+    } catch {
+        pending = pending ?? state; /* offline: try again with the next save */
+    }
+}
+async function listFonts() {
+    const r = await call('/fonts', { cache: 'no-store' });
+    return r.ok ? (await r.json()).fonts : [];
+}
+async function getFont(slug) {
+    const r = await call(`/fonts/${slug}`, { cache: 'no-store' });
+    if (!r.ok) throw new Error(`font ${r.status}`);
+    return r.arrayBuffer();
+}
+async function putFont(f, data) {
+    const q = new URLSearchParams({ name: f.name, file: f.file });
+    const r = await call(`/fonts/${f.slug}?${q}`, { method: 'PUT', body: data });
+    if (!r.ok) throw new Error(`font upload ${r.status}`);
+}
+async function deleteFont(slug) {
+    await call(`/fonts/${slug}`, { method: 'DELETE' });
+}
+
+/*
+ * sharing - where uploaded fonts go so every joined device has them.
+ *
+ * uploads.ts keeps every font in this browser (IndexedDB) and talks to the
+ * FontShare below for the cross-device copy. Today that is the sync service
+ * (sync.ts): fonts are stored there encrypted, per code, and fetched with the
+ * device's token - they never get a public address. When this device has not
+ * joined, or on the archive File, there is no share and fonts stay local.
+ */
+const SyncShare = {
+    canRead: isJoined,
+    list: listFonts,
+    fetch: (f) => getFont(f.slug),
+    put: putFont,
+    remove: deleteFont,
 };
 
 /*
@@ -823,8 +984,9 @@ const LocalOnly = {
  * go straight to the browser's font engine (FontFace) - so visitors to the site
  * cannot fetch it. (Nothing stops the owner's own browser from reading it back;
  * that is the limit of any font a page can draw.)
- * Cross-device fonts are left to a future sync service (sharing.ts); a font
- * that is both local and shared would be listed once.
+ * On a device joined to the sync service (sharing.ts, sync.ts) every upload is
+ * also stored there, encrypted, and the other joined devices fetch it on load; a
+ * font that is both local and shared is listed once.
  * Where storage is blocked (the archive File's sandboxed viewer) an upload lasts
  * for the visit only. Draft exports carry only the face's name, never the font.
  */
@@ -864,10 +1026,7 @@ function slugFor(fileName) {
 }
 /* hand a font to the font engine and put it on the first shelf; throws when it is not a usable font */
 async function register(slug, name, source, shared) {
-    const ff = new FontFace(
-        slug,
-        typeof source === 'string' ? `url(${JSON.stringify(source)})` : source,
-    );
+    const ff = new FontFace(slug, source);
     await ff.load();
     document.fonts.add(ff);
     const face = {
@@ -892,6 +1051,13 @@ async function restoreFonts() {
         /* no storage */
     }
     let shared = [];
+    if (SyncShare.canRead()) {
+        try {
+            shared = await SyncShare.list();
+        } catch {
+            /* offline */
+        }
+    }
     const sharedSlugs = new Set(shared.map((f) => f.slug));
     for (const f of local) {
         try {
@@ -904,9 +1070,15 @@ async function restoreFonts() {
     for (const f of shared.slice().reverse()) {
         if (localSlugs.has(f.slug)) continue;
         try {
-            await register(f.slug, f.name, LocalOnly.fontUrl(f), true);
+            const data = await SyncShare.fetch(f);
+            await register(f.slug, f.name, data.slice(0), true);
+            try {
+                await withStore('readwrite', (s) => s.put({ ...f, data }));
+            } catch {
+                /* storage blocked */
+            }
         } catch {
-            /* not published yet */
+            /* unreachable now; tried again next load */
         }
     }
     return [...UPLOADED];
@@ -921,31 +1093,59 @@ async function addFontFile(file) {
     } catch {
         /* storage blocked: this visit only */
     }
+    if (SyncShare.canRead()) {
+        try {
+            await SyncShare.put(id, data);
+            face.shared = true;
+        } catch {
+            /* kept here; shared on the next join */
+        }
+    }
     return face;
 }
 /* remove from this browser; a font in the repo stays listed there (it comes back as a repo face) */
 async function removeFont(slug) {
+    if (SyncShare.canRead()) {
+        try {
+            await SyncShare.remove(slug);
+        } catch {
+            /* offline */
+        }
+    }
     try {
         await withStore('readwrite', (s) => s.delete(slug));
     } catch {
         /* nothing kept */
     }
     const i = UPLOADED.findIndex((f) => f.slug === slug);
-    if (i >= 0 && !UPLOADED[i].shared) UPLOADED.splice(i, 1);
+    if (i >= 0) UPLOADED.splice(i, 1);
 }
-
-/*
- * host - what the page is allowed to do where it runs.
- *
- * The same source builds two fronts. The hosted archive File runs inside a
- * sandboxed viewer frame with no storage and no downloads, so there settings and
- * drafts live only for the visit and "save file" goes through a helper tab.
- * The GitHub Pages mirror is a normal page: the mirror build flips STANDALONE to
- * true, which turns on saving settings and drafts in localStorage and a direct
- * file download for "save file".
- */
-/* localStorage key for the saved state (settings, drafts, mode) on the mirror */
-const STATE_KEY = 'middots-state';
+/* after joining: send fonts that only this browser has, then bring in the shared ones */
+async function shareLocalFonts() {
+    if (!SyncShare.canRead()) return [...UPLOADED];
+    let local = [];
+    try {
+        local = await withStore('readonly', (s) => s.getAll());
+    } catch {
+        /* none */
+    }
+    let shared = [];
+    try {
+        shared = await SyncShare.list();
+    } catch {
+        /* offline */
+    }
+    const there = new Set(shared.map((f) => f.slug));
+    for (const f of local)
+        if (!there.has(f.slug)) {
+            try {
+                await SyncShare.put({ slug: f.slug, name: f.name, file: f.file }, f.data);
+            } catch {
+                /* later */
+            }
+        }
+    return restoreFonts();
+}
 
 /* ==========================================================================
  * App - reading page and draft bench
@@ -2275,14 +2475,13 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUp
                                 {
                                     className: 'face-own',
                                     children: [
-                                        !f.shared &&
-                                            jsxRuntimeExports.jsx('button', {
-                                                type: 'button',
-                                                className: 'face-remove',
-                                                'aria-label': `remove ${f.name}`,
-                                                onClick: () => onRemove(f.slug),
-                                                children: '\u00D7',
-                                            }),
+                                        jsxRuntimeExports.jsx('button', {
+                                            type: 'button',
+                                            className: 'face-remove',
+                                            'aria-label': `remove ${f.name}`,
+                                            onClick: () => onRemove(f.slug),
+                                            children: '\u00D7',
+                                        }),
                                         jsxRuntimeExports.jsx('button', {
                                             type: 'button',
                                             className: `face-choice${f.slug === value ? ' current' : ''}`,
@@ -2368,6 +2567,133 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUp
                                   strokeWidth: '1.1',
                               }),
                           }),
+            }),
+        ],
+    });
+}
+/*
+ * SyncControl - join this device to the sync service with a code (sync.ts).
+ * The first device to use a code claims it (asked once); later devices type the same code.
+ */
+function SyncControl({ onJoined }) {
+    const [open, setOpen] = reactExports.useState(false);
+    const [code, setCode] = reactExports.useState('');
+    const [note, setNote] = reactExports.useState('');
+    const [askClaim, setAskClaim] = reactExports.useState(false);
+    const [joined, setJoined] = reactExports.useState(isJoined());
+    const go = async (claim) => {
+        setNote('\u2026');
+        const r = await join(code.trim(), claim);
+        if (r.ok) {
+            setJoined(true);
+            setCode('');
+            setAskClaim(false);
+            setNote(r.created ? 'code claimed, synced' : 'joined, synced');
+            onJoined();
+            return;
+        }
+        if (r.unknown) {
+            setAskClaim(true);
+            setNote('nobody uses this code yet. make it yours?');
+            return;
+        }
+        setNote(r.error);
+    };
+    const label = joined ? 'synced' : 'sync';
+    return jsxRuntimeExports.jsxs('div', {
+        className: 'face-widget sync-widget',
+        children: [
+            open &&
+                jsxRuntimeExports.jsx('div', {
+                    className: 'face-list sync-panel',
+                    children: joined
+                        ? jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
+                              children: [
+                                  jsxRuntimeExports.jsx('p', {
+                                      className: 'sync-note',
+                                      children: note || 'this device is synced',
+                                  }),
+                                  jsxRuntimeExports.jsx('button', {
+                                      type: 'button',
+                                      className: 'face-choice',
+                                      onClick: () => {
+                                          leave();
+                                          setJoined(false);
+                                          setNote('this device left sync');
+                                      },
+                                      children: 'leave',
+                                  }),
+                              ],
+                          })
+                        : jsxRuntimeExports.jsxs('form', {
+                              onSubmit: (e) => {
+                                  e.preventDefault();
+                                  void go(askClaim);
+                              },
+                              children: [
+                                  jsxRuntimeExports.jsx('input', {
+                                      className: 'sync-code',
+                                      'aria-label': 'sync code',
+                                      placeholder: 'code',
+                                      autoComplete: 'off',
+                                      autoCapitalize: 'off',
+                                      spellCheck: false,
+                                      maxLength: 64,
+                                      value: code,
+                                      onChange: (e) => {
+                                          setCode(e.target.value.replace(/[^A-Za-z0-9]/g, ''));
+                                          setAskClaim(false);
+                                          setNote('');
+                                      },
+                                  }),
+                                  jsxRuntimeExports.jsx('button', {
+                                      type: 'submit',
+                                      className: 'face-choice face-upload',
+                                      disabled: code.trim().length < 4,
+                                      children: askClaim ? 'make it mine' : 'join',
+                                  }),
+                                  note &&
+                                      jsxRuntimeExports.jsx('p', {
+                                          className: 'sync-note',
+                                          children: note,
+                                      }),
+                              ],
+                          }),
+                }),
+            jsxRuntimeExports.jsx('button', {
+                type: 'button',
+                className: open ? 'on' : '',
+                'aria-label': label,
+                'data-tip': open ? undefined : label,
+                'aria-expanded': open,
+                onClick: () => setOpen(!open),
+                children: jsxRuntimeExports.jsxs('svg', {
+                    width: '14',
+                    height: '14',
+                    viewBox: '0 0 14 14',
+                    'aria-hidden': 'true',
+                    children: [
+                        jsxRuntimeExports.jsx('path', {
+                            d: 'M2.4 6.2a4.7 4.7 0 0 1 8.3-2.1M11.6 7.8a4.7 4.7 0 0 1-8.3 2.1',
+                            fill: 'none',
+                            stroke: 'currentColor',
+                            strokeWidth: '1.1',
+                        }),
+                        jsxRuntimeExports.jsx('path', {
+                            d: 'M10.9 1.9v2.4H8.5M3.1 12.1V9.7h2.4',
+                            fill: 'none',
+                            stroke: 'currentColor',
+                            strokeWidth: '1.1',
+                        }),
+                        joined &&
+                            jsxRuntimeExports.jsx('circle', {
+                                cx: '7',
+                                cy: '7',
+                                r: '1.1',
+                                fill: 'currentColor',
+                            }),
+                    ],
+                }),
             }),
         ],
     });
@@ -2664,6 +2990,17 @@ function App() {
     reactExports.useEffect(() => {
         void restoreFonts().then(setUploads);
     }, []);
+    /* a device just joined: bring in what the code already holds, else send up what this device has */
+    const syncJoined = () => {
+        void pull().then((r) => {
+            if (r) applyRemote(r);
+            else {
+                saveStateRef.current();
+                void pushNow();
+            }
+        });
+        void shareLocalFonts().then((f) => setUploads(f));
+    };
     const uploadFace = async (file) => {
         await addFontFile(file);
         setUploads([...UPLOADED]);
@@ -3009,41 +3346,54 @@ function App() {
             scroll: sc ? Math.round(sc.scrollTop) : 0,
         };
         storeSet(STATE_KEY, JSON.stringify(payload));
+        schedulePush(payload); // to the sync service, batched (sync.ts); nothing happens when not joined
     };
-    // once, on load: bring back the saved state before anything is written over it
+    /* put a saved state on the page: from this browser on load, or from the sync service */
+    const applySaved = (saved) => {
+        let mode = 'read';
+        let data = {};
+        try {
+            data = JSON.parse(saved);
+            mode = data.mode === 'draft' ? 'draft' : 'read';
+        } catch {
+            /* ignored below */
+        }
+        doImport(saved, { mode });
+        // fold state: only true/false flags are taken back; pieces that no longer exist just never render
+        if (data.open && typeof data.open === 'object') {
+            const flags = {};
+            for (const [id, v] of Object.entries(data.open))
+                if (typeof v === 'boolean') flags[id] = v;
+            setOpen(flags);
+        }
+        // the page he was on, unless the address already names a folder
+        if (
+            !viewFromHash() &&
+            typeof data.view === 'string' &&
+            (data.view === 'home' || FOLDERS.some((f) => f.id === data.view))
+        )
+            setView(data.view);
+        // scroll position: applied after the restored pieces have laid out (two frames)
+        const top = typeof data.scroll === 'number' ? data.scroll : 0;
+        if (top > 0)
+            requestAnimationFrame(() =>
+                requestAnimationFrame(() => scrollerRef.current?.scrollTo({ top })),
+            );
+    };
+    const applyRemote = (r) => {
+        const text = JSON.stringify(r.state);
+        storeSet(STATE_KEY, text);
+        applySaved(text);
+    };
+    // once, on load: bring back the saved state before anything is written over it,
+    // then ask the sync service for anything newer from another device
     reactExports.useEffect(() => {
         const saved = storeGet(STATE_KEY);
-        if (saved) {
-            let mode = 'read';
-            let data = {};
-            try {
-                data = JSON.parse(saved);
-                mode = data.mode === 'draft' ? 'draft' : 'read';
-            } catch {
-                /* ignored below */
-            }
-            doImport(saved, { mode });
-            // fold state: only true/false flags are taken back; pieces that no longer exist just never render
-            if (data.open && typeof data.open === 'object') {
-                const flags = {};
-                for (const [id, v] of Object.entries(data.open))
-                    if (typeof v === 'boolean') flags[id] = v;
-                setOpen(flags);
-            }
-            // the page he was on, unless the address already names a folder
-            if (
-                !viewFromHash() &&
-                typeof data.view === 'string' &&
-                (data.view === 'home' || FOLDERS.some((f) => f.id === data.view))
-            )
-                setView(data.view);
-            // scroll position: applied after the restored pieces have laid out (two frames)
-            const top = typeof data.scroll === 'number' ? data.scroll : 0;
-            if (top > 0)
-                requestAnimationFrame(() =>
-                    requestAnimationFrame(() => scrollerRef.current?.scrollTo({ top })),
-                );
-        }
+        if (saved) applySaved(saved);
+        onNewer(applyRemote);
+        void pull().then((r) => {
+            if (r) applyRemote(r);
+        });
         setRestored(true); // batched with the restore, so the first save already sees the restored state
     }, []);
     // any change to settings, pieces or mode is saved on the next render
@@ -3076,8 +3426,15 @@ function App() {
             timer = window.setTimeout(() => saveStateRef.current(), 700);
         };
         const flush = () => saveStateRef.current();
+        // hidden: save and send now; visible again: pick up what another device saved meanwhile
         const onVisibility = () => {
-            if (document.visibilityState === 'hidden') flush();
+            if (document.visibilityState === 'hidden') {
+                flush();
+                void pushNow(true);
+            } else
+                void pull().then((r) => {
+                    if (r) applyRemote(r);
+                });
         };
         document.addEventListener('input', onInput, true);
         const sc = scrollerRef.current;
@@ -3659,6 +4016,7 @@ function App() {
                             }),
                         ],
                     }),
+                    jsxRuntimeExports.jsx(SyncControl, { onJoined: syncJoined }),
                 ],
             }),
             jsxRuntimeExports.jsx('input', {
