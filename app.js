@@ -1394,15 +1394,28 @@ const ARCHIVE_SUMMARY =
  * Cover - the main page: the folders in one centered column, and a + under them.
  * The + turns into a bare name field (just the crimson caret); Enter makes the folder and opens it in
  * draft mode with a new piece. A folder's name is edited in the same field: double-click it, or hold
- * it on a phone. Beside the + sits "edit": every folder becomes its name field with a × after it -
- * rename in place, × deletes the folder and everything in it at once (no warning: the reader's call;
- * the Instinct archive is the backup). "done" closes it. Folders from pieces.json come first; folders
- * made on the page follow.
+ * it on a phone. Deleting lives in the count after the title (see FolderCount). Folders from
+ * pieces.json come first; folders made on the page follow.
  */
 function NameField({ initial, onDone }) {
     const [name, setName] = reactExports.useState(initial);
     const finish = (keep) => onDone(keep && name.trim() ? name.trim() : null);
+    const ref = reactExports.useRef(null);
+    // the caret at the end of the name, once mounted (a long press on a phone would otherwise leave it at the start)
+    const born = reactExports.useRef(Date.now());
+    reactExports.useEffect(() => {
+        const el = ref.current;
+        if (el) {
+            el.focus();
+            el.setSelectionRange(el.value.length, el.value.length);
+        }
+    }, []);
     return jsxRuntimeExports.jsx('input', {
+        ref: ref,
+        // the lift of the long press that opened the field lands on it: don't let it move the caret
+        onMouseDown: (e) => {
+            if (Date.now() - born.current < 700) e.preventDefault();
+        },
         className: 'cover-name',
         autoFocus: true,
         value: name,
@@ -1622,31 +1635,30 @@ function Logo() {
         }),
     });
 }
-/* a folder's name in edit mode: stays a field; Enter or leaving it keeps the new name (an empty one is ignored) */
-function FolderRename({ initial, onDone }) {
-    const [name, setName] = reactExports.useState(initial);
-    return jsxRuntimeExports.jsx('input', {
-        className: 'cover-name',
-        value: name,
-        maxLength: 60,
-        size: Math.max(1, name.length + 1),
-        'aria-label': 'folder name',
-        onChange: (e) => setName(e.target.value),
-        onKeyDown: (e) => {
-            if (e.key === 'Enter') e.currentTarget.blur();
-            if (e.key === 'Escape') {
-                setName(initial);
-            }
-        },
-        onBlur: () => onDone(name.trim() || null),
-    });
+/* a folder's count, hanging off its title: the number of pieces - or, when asked, the delete button.
+   It turns into "delete" after a mouse has rested on the folder for 4 seconds, or while the folder's
+   name is being edited (a long press on a phone, a double-click on a desktop). Pressing it deletes
+   the folder at once, no warning - the reader's call; the Instinct archive is the backup. */
+const DELETE_HOVER_MS = 4000;
+function FolderCount({ n, armed, title, onDelete }) {
+    return armed
+        ? jsxRuntimeExports.jsx('button', {
+              type: 'button',
+              className: 'cover-folder-count cover-delete',
+              'aria-label': `delete ${title}`,
+              onPointerDown: (e) => e.preventDefault(),
+              onClick: onDelete,
+              children: 'delete',
+          })
+        : jsxRuntimeExports.jsx('span', { className: 'cover-folder-count', children: n });
 }
 function Cover({ folders, count, onOpen, onCreate, onRename, onDelete }) {
     const [naming, setNaming] = reactExports.useState(false); // the + is a name field
-    const [editAll, setEditAll] = reactExports.useState(false); // edit: every folder is a name field with a × after it
     const [editing, setEditing] = reactExports.useState(null); // a folder being renamed
+    const [armed, setArmed] = reactExports.useState(null); // a folder whose count shows "delete" (after a 4s hover)
     const hold = reactExports.useRef(undefined);
     const held = reactExports.useRef(false);
+    const hover = reactExports.useRef(undefined);
     const press = (id) => {
         held.current = false;
         hold.current = window.setTimeout(() => {
@@ -1655,6 +1667,13 @@ function Cover({ folders, count, onOpen, onCreate, onRename, onDelete }) {
         }, 550);
     };
     const release = () => window.clearTimeout(hold.current);
+    reactExports.useEffect(
+        () => () => {
+            window.clearTimeout(hold.current);
+            window.clearTimeout(hover.current);
+        },
+        [],
+    );
     return jsxRuntimeExports.jsxs('div', {
         className: 'cover',
         children: [
@@ -1663,67 +1682,63 @@ function Cover({ folders, count, onOpen, onCreate, onRename, onDelete }) {
                 className: 'cover-folders',
                 'aria-label': 'folders',
                 children: folders.map((f) =>
-                    editAll
-                        ? jsxRuntimeExports.jsxs(
-                              'span',
-                              {
-                                  className: 'cover-edit-row',
-                                  children: [
-                                      jsxRuntimeExports.jsx(FolderRename, {
+                    jsxRuntimeExports.jsxs(
+                        'span',
+                        {
+                            className: 'cover-row',
+                            // a mouse resting on the folder for 4s arms its delete; leaving disarms it
+                            onPointerEnter: (e) => {
+                                if (e.pointerType !== 'mouse') return;
+                                window.clearTimeout(hover.current);
+                                hover.current = window.setTimeout(
+                                    () => setArmed(f.id),
+                                    DELETE_HOVER_MS,
+                                );
+                            },
+                            onPointerLeave: (e) => {
+                                if (e.pointerType !== 'mouse') return;
+                                window.clearTimeout(hover.current);
+                                setArmed((a) => (a === f.id ? null : a));
+                            },
+                            children: [
+                                editing === f.id
+                                    ? jsxRuntimeExports.jsx(NameField, {
                                           initial: f.title,
                                           onDone: (n) => {
-                                              if (n && n !== f.title) onRename(f.id, n);
+                                              if (n) onRename(f.id, n);
+                                              setEditing(null);
                                           },
-                                      }),
-                                      jsxRuntimeExports.jsx('button', {
+                                      })
+                                    : jsxRuntimeExports.jsx('button', {
                                           type: 'button',
-                                          className: 'cover-delete',
-                                          'aria-label': `delete ${f.title}`,
-                                          onClick: () => onDelete(f.id),
-                                          children: '\u00D7',
+                                          className: 'cover-folder',
+                                          onClick: () => {
+                                              if (!held.current) onOpen(f.id);
+                                          },
+                                          onDoubleClick: () => setEditing(f.id),
+                                          onPointerDown: () => press(f.id),
+                                          onPointerUp: release,
+                                          onPointerLeave: release,
+                                          onContextMenu: (e) => e.preventDefault(),
+                                          children: jsxRuntimeExports.jsx('span', {
+                                              className: 'cover-folder-title',
+                                              children: f.title,
+                                          }),
                                       }),
-                                  ],
-                              },
-                              f.id,
-                          )
-                        : editing === f.id
-                          ? jsxRuntimeExports.jsx(
-                                NameField,
-                                {
-                                    initial: f.title,
-                                    onDone: (n) => {
-                                        if (n) onRename(f.id, n);
+                                jsxRuntimeExports.jsx(FolderCount, {
+                                    n: count(f.id),
+                                    armed: armed === f.id || editing === f.id,
+                                    title: f.title,
+                                    onDelete: () => {
                                         setEditing(null);
+                                        setArmed(null);
+                                        onDelete(f.id);
                                     },
-                                },
-                                f.id,
-                            )
-                          : jsxRuntimeExports.jsxs(
-                                'button',
-                                {
-                                    type: 'button',
-                                    className: 'cover-folder',
-                                    onClick: () => {
-                                        if (!held.current) onOpen(f.id);
-                                    },
-                                    onDoubleClick: () => setEditing(f.id),
-                                    onPointerDown: () => press(f.id),
-                                    onPointerUp: release,
-                                    onPointerLeave: release,
-                                    onContextMenu: (e) => e.preventDefault(),
-                                    children: [
-                                        jsxRuntimeExports.jsx('span', {
-                                            className: 'cover-folder-title',
-                                            children: f.title,
-                                        }),
-                                        jsxRuntimeExports.jsx('span', {
-                                            className: 'cover-folder-count',
-                                            children: count(f.id),
-                                        }),
-                                    ],
-                                },
-                                f.id,
-                            ),
+                                }),
+                            ],
+                        },
+                        f.id,
+                    ),
                 ),
             }),
             jsxRuntimeExports.jsx('div', {
@@ -1736,24 +1751,12 @@ function Cover({ folders, count, onOpen, onCreate, onRename, onDelete }) {
                               if (n) onCreate(n);
                           },
                       })
-                    : jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
-                          children: [
-                              !editAll &&
-                                  jsxRuntimeExports.jsx('button', {
-                                      type: 'button',
-                                      className: 'cover-add',
-                                      'aria-label': 'new folder',
-                                      onClick: () => setNaming(true),
-                                      children: '+',
-                                  }),
-                              (folders.length > 0 || editAll) &&
-                                  jsxRuntimeExports.jsx('button', {
-                                      type: 'button',
-                                      className: editAll ? 'cover-edit' : 'cover-edit aside',
-                                      onClick: () => setEditAll((v) => !v),
-                                      children: editAll ? 'done' : 'edit',
-                                  }),
-                          ],
+                    : jsxRuntimeExports.jsx('button', {
+                          type: 'button',
+                          className: 'cover-add',
+                          'aria-label': 'new folder',
+                          onClick: () => setNaming(true),
+                          children: '+',
                       }),
             }),
         ],

@@ -1203,9 +1203,6 @@ s.ov {
 }
 /* the count hangs off the title's right edge (out of the flow), so the title alone is centered;
    raised like a superscript, set in oldstyle figures */
-.cover-folder {
-    position: relative;
-}
 .cover-folder-count {
     position: absolute;
     left: 100%;
@@ -1216,6 +1213,7 @@ s.ov {
     font-size: 0.55em;
     line-height: 1;
     opacity: 0.6;
+    color: var(--dim);
     white-space: nowrap;
     font-variant-numeric: oldstyle-nums;
     font-feature-settings: 'onum' 1;
@@ -1243,62 +1241,28 @@ s.ov {
 .cover-new {
     margin-top: 22px;
     min-height: 1.4em;
+}
+/* a folder row: the title alone sets the centering; the count (or "delete") hangs off its right edge */
+.cover-row {
     position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-/* "edit" hangs to the right of the + (out of the flow), so the + stays centered under the titles */
-.cover-edit.aside {
-    position: absolute;
-    left: calc(50% + 1.4em);
-    top: 50%;
-    transform: translateY(-50%);
-}
-/* edit: beside the +, in the side-title voice; every folder turns into its name field with a × after it */
-.cover-edit {
-    background: none;
-    border: 0;
-    padding: 2px 4px;
-    color: var(--dim);
-    font-family: var(--font-mono);
-    font-size: var(--fs-mono);
-    letter-spacing: 0.04em;
-    cursor: pointer;
-    opacity: 0.6;
-    transition:
-        opacity 0.35s ease,
-        color 0.35s ease;
-}
-.cover-edit:hover,
-.cover-edit:focus-visible {
-    opacity: 1;
-    color: var(--ink);
-    outline: none;
-}
-.cover-edit-row {
-    display: flex;
-    align-items: baseline;
-    justify-content: center;
-    gap: 10px;
+    display: inline-block;
     line-height: var(--lh);
-}
-.cover-edit-row .cover-name {
-    color: var(--ink);
-    border-bottom: 1px solid var(--hairline);
+    font-size: var(--fs);
 }
 .cover-delete {
     background: none;
     border: 0;
-    padding: 0 4px;
-    color: var(--dim);
+    padding: 0;
+    color: #dc143c;
     font-family: var(--font-mono);
-    font-size: var(--fs-mono);
+    letter-spacing: 0.04em;
     cursor: pointer;
+    opacity: 0.85;
+    animation: fx-rise 0.25s ease-out;
 }
 .cover-delete:hover,
 .cover-delete:focus-visible {
-    color: #dc143c;
+    opacity: 1;
     outline: none;
 }
 /* naming a folder: no line, no placeholder - the text and a blinking crimson caret, nothing else */
