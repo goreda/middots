@@ -985,6 +985,13 @@ s.ov {
     color: #dc143c;
 }
 
+/* dialogue pieces (two hands): every part starts flush, its hand mark (○ / ●) hanging in the margin */
+.story.dialogue .story-text > p,
+.story.dialogue .story-text > div {
+    padding-left: 1.25em;
+    text-indent: -1.25em;
+}
+
 /* standalone mirror: with no host header above the page, the top fade is the
    page's own background thinning out (mask), so it follows --bg and inversion */
 .seam.standalone {
