@@ -818,6 +818,19 @@ s.ov {
     text-decoration-color: currentColor;
     color: var(--dim);
 }
+/* focus dim: while writing, every paragraph but the caret's own fades to a whisper, and so do
+   titles and the other pieces; the page comes back the moment the caret leaves the text */
+:root.focusdim .story-text.editable > *,
+:root.focusdim .story-head,
+:root.focusdim .story-audio {
+    transition: opacity 0.35s ease;
+}
+:root.focusdim.focus-in .story-text.editable > *:not([data-focus]),
+:root.focusdim.focus-in .story-head,
+:root.focusdim.focus-in .story-audio {
+    opacity: 0.18;
+}
+
 /* platen mode: the typing line holds at a fixed height, the page rolls under it */
 :root.platen {
     --pin: calc(var(--vt) + max(190px, 44vh));

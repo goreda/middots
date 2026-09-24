@@ -3234,6 +3234,7 @@ function App() {
     const fileRef = reactExports.useRef(null);
     const editRefs = reactExports.useRef(new Map());
     const [platen, setPlaten] = reactExports.useState(false);
+    const [focusDim, setFocusDim] = reactExports.useState(false); // focus dim: all but the paragraph being written fades
     const [bodyFace, setBodyFace] = reactExports.useState('eb-garamond');
     const [titleFace, setTitleFace] = reactExports.useState('fragment-mono');
     const [taste, setTaste] = reactExports.useState(null);
@@ -3437,6 +3438,35 @@ function App() {
             window.cancelAnimationFrame(raf);
         };
     }, [platen, mode]);
+    // focus dim: the paragraph holding the caret is marked data-focus; CSS fades the rest of the page
+    reactExports.useEffect(() => {
+        const on = focusDim && mode === 'draft';
+        document.documentElement.classList.toggle('focusdim', on);
+        if (!on) return;
+        let current = null;
+        const mark = () => {
+            const sel = window.getSelection();
+            const n = sel && sel.rangeCount ? sel.getRangeAt(0).startContainer : null;
+            const el = n ? (n.nodeType === 1 ? n : n.parentElement) : null;
+            const body = el?.closest('.story-text.editable');
+            // the paragraph: the body's child that holds the caret
+            let para = el;
+            while (para && body && para.parentElement !== body) para = para.parentElement;
+            const next = body && para && para.parentElement === body ? para : null;
+            if (next === current) return;
+            current?.removeAttribute('data-focus');
+            next?.setAttribute('data-focus', '');
+            current = next;
+            document.documentElement.classList.toggle('focus-in', !!next);
+        };
+        document.addEventListener('selectionchange', mark);
+        mark();
+        return () => {
+            document.removeEventListener('selectionchange', mark);
+            current?.removeAttribute('data-focus');
+            document.documentElement.classList.remove('focusdim', 'focus-in');
+        };
+    }, [focusDim, mode]);
     reactExports.useEffect(() => {
         document.documentElement.classList.toggle('commit', commit && mode === 'draft');
     }, [commit, mode]);
@@ -3703,6 +3733,7 @@ function App() {
             soundEra: eraId,
             sound: soundOn,
             platen,
+            focusDim,
             commitment: commit,
             textFace: bodyFace,
             titleFace,
@@ -3822,6 +3853,7 @@ function App() {
             if (typeof s.inverted === 'boolean') setInverted(s.inverted);
             if (typeof s.sound === 'boolean') setSoundOn(s.sound);
             if (typeof s.platen === 'boolean') setPlaten(s.platen);
+            if (typeof s.focusDim === 'boolean') setFocusDim(s.focusDim);
             if (
                 typeof s.textFace === 'string' &&
                 (faceBySlug(s.textFace) || s.textFace.startsWith('upload-'))
@@ -3967,6 +3999,7 @@ function App() {
         eraId,
         soundOn,
         platen,
+        focusDim,
         commit,
         bodyFace,
         titleFace,
@@ -4247,6 +4280,33 @@ function App() {
                                                 d: 'M4 2.6h6M4 11.4h6',
                                                 stroke: 'currentColor',
                                                 strokeWidth: '1.1',
+                                            }),
+                                        ],
+                                    }),
+                                }),
+                                jsxRuntimeExports.jsx('button', {
+                                    type: 'button',
+                                    className: focusDim ? 'on' : '',
+                                    'aria-pressed': focusDim,
+                                    'aria-label': 'focus dim',
+                                    'data-tip': focusDim ? 'focus dim · on' : 'focus dim',
+                                    onClick: () => setFocusDim((v) => !v),
+                                    children: jsxRuntimeExports.jsxs('svg', {
+                                        width: '14',
+                                        height: '14',
+                                        viewBox: '0 0 14 14',
+                                        'aria-hidden': 'true',
+                                        children: [
+                                            jsxRuntimeExports.jsx('path', {
+                                                d: 'M2.5 3.4h9M2.5 10.6h9',
+                                                stroke: 'currentColor',
+                                                strokeWidth: '1.1',
+                                                opacity: '.35',
+                                            }),
+                                            jsxRuntimeExports.jsx('path', {
+                                                d: 'M2.5 7h9',
+                                                stroke: 'currentColor',
+                                                strokeWidth: '1.3',
                                             }),
                                         ],
                                     }),
