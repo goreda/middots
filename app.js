@@ -2385,6 +2385,23 @@ function EditableBody({ id, lines, register, onInput }) {
         spellCheck: false,
         ref: (el) => register(id, 'text', el),
         onInput: onInput,
+        onKeyDown: (e) => {
+            // Tab writes a tab instead of leaving the text. It goes through the normal typing path
+            // (insertText), so draft mode's strike-instead-of-delete rules apply to it as to any letter.
+            // Shift+Tab still moves focus, so the keyboard is never trapped here.
+            if (
+                e.key !== 'Tab' ||
+                e.shiftKey ||
+                e.altKey ||
+                e.ctrlKey ||
+                e.metaKey ||
+                e.nativeEvent.isComposing
+            )
+                return;
+            e.preventDefault();
+            if (!document.execCommand('insertText', false, '\t'))
+                insertPlain(e.currentTarget, '\t');
+        },
         children: (initial.length ? initial : ['']).map((line, i) =>
             jsxRuntimeExports.jsx(
                 'p',

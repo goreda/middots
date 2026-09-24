@@ -806,6 +806,10 @@ span.story-title.editable:empty::before {
 .story-text.editable > div {
     white-space: pre-wrap;
 }
+/* a typed Tab is a real tab character; four spaces wide reads as an indent, not a gap */
+.story-text {
+    tab-size: 4;
+}
 /* commitment mode: what was deleted stays, struck and leaning */
 s.ov {
     font-style: italic;
