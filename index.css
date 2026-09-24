@@ -599,6 +599,21 @@ span.story-title.editable:empty::before {
     flex: none;
 }
 
+/* the draft button leads the stack and turns over on hover: ink fill, background-colored icon */
+.controls button.draft-toggle:hover,
+.controls button.draft-toggle:focus-visible {
+    background: var(--ink);
+    color: var(--bg);
+    border-color: var(--ink);
+}
+.controls button.draft-toggle {
+    transition:
+        color 0.35s ease,
+        border-color 0.35s ease,
+        background-color 0.35s ease,
+        opacity 0.35s ease;
+}
+
 /* era control: one icon; hover unfolds the choices leftward, random leftmost */
 .era-widget {
     position: relative;
