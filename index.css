@@ -1065,13 +1065,14 @@ s.ov {
     background: none;
 }
 
-/* ---- main page (Cover): one centered column - the folders, then + for a new one ---- */
+/* ---- main page (Cover): one column, centered across, on the horizon - the folders, then + for a new one ---- */
 .cover {
-    min-height: calc(100vh - var(--pin) - 120px);
+    /* on the horizon: the first folder starts where the top fade ends (the page itself starts at the
+       pin line, so move by the difference; follows the fade buttons) */
+    margin-top: calc(var(--vt) + var(--seam-h) - var(--pin));
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
     text-align: center;
 }
 .cover-folders {
