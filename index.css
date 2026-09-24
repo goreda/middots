@@ -1012,6 +1012,17 @@ s.ov {
 .fx-palette button.on {
     color: #dc143c;
 }
+.fx-palette .fx-sep {
+    width: 1px;
+    align-self: stretch;
+    margin: 6px 3px;
+    background: var(--hairline);
+}
+.fx-palette .fx-indent,
+.fx-palette .fx-outdent {
+    font-family: var(--font-mono);
+    font-size: 18px;
+}
 
 /* dialogue pieces (two hands): every part starts flush, its hand mark (○ / ●) hanging in the margin */
 .story.dialogue .story-text > p,

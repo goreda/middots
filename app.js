@@ -1975,7 +1975,7 @@ function FxPalette() {
                 const first = rects[0] ?? r.getBoundingClientRect();
                 const box = r.getBoundingClientRect();
                 setPos({
-                    x: Math.max(8, Math.min(first.left, window.innerWidth - 150)),
+                    x: Math.max(8, Math.min(first.left, window.innerWidth - 220)),
                     y: box.top,
                     root: host,
                 });
@@ -1996,7 +1996,7 @@ function FxPalette() {
     const sel = window.getSelection();
     const r = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
     const above = pos.y > 52;
-    return jsxRuntimeExports.jsx('div', {
+    return jsxRuntimeExports.jsxs('div', {
         className: 'fx-palette',
         style: { left: pos.x, top: above ? pos.y - 40 : pos.y + 28 },
         onMouseEnter: () => {
@@ -2006,31 +2006,57 @@ function FxPalette() {
             hovering.current = false;
         },
         onMouseDown: (e) => e.preventDefault(),
-        children: FX.map((f) =>
-            jsxRuntimeExports.jsx(
-                'button',
-                {
-                    type: 'button',
-                    'aria-label': { i: 'italic', b: 'bold', u: 'underline', s: 'strikethrough' }[
-                        f.key
-                    ],
-                    className: `fx-${f.key}${r && fxState(pos.root, r, f.tag) ? ' on' : ''}`,
-                    onClick: () => {
-                        toggleFx(pos.root, f.tag);
-                        bump((n) => n + 1);
+        children: [
+            FX.map((f) =>
+                jsxRuntimeExports.jsx(
+                    'button',
+                    {
+                        type: 'button',
+                        'aria-label': {
+                            i: 'italic',
+                            b: 'bold',
+                            u: 'underline',
+                            s: 'strikethrough',
+                        }[f.key],
+                        className: `fx-${f.key}${r && fxState(pos.root, r, f.tag) ? ' on' : ''}`,
+                        onClick: () => {
+                            toggleFx(pos.root, f.tag);
+                            bump((n) => n + 1);
+                        },
+                        children:
+                            f.key === 'i'
+                                ? jsxRuntimeExports.jsx('em', { children: 'i' })
+                                : f.key === 'b'
+                                  ? jsxRuntimeExports.jsx('strong', { children: 'b' })
+                                  : f.key === 'u'
+                                    ? jsxRuntimeExports.jsx('u', { children: 'u' })
+                                    : jsxRuntimeExports.jsx('del', { children: 's' }),
                     },
-                    children:
-                        f.key === 'i'
-                            ? jsxRuntimeExports.jsx('em', { children: 'i' })
-                            : f.key === 'b'
-                              ? jsxRuntimeExports.jsx('strong', { children: 'b' })
-                              : f.key === 'u'
-                                ? jsxRuntimeExports.jsx('u', { children: 'u' })
-                                : jsxRuntimeExports.jsx('del', { children: 's' }),
-                },
-                f.key,
+                    f.key,
+                ),
             ),
-        ),
+            jsxRuntimeExports.jsx('span', { className: 'fx-sep', 'aria-hidden': 'true' }),
+            jsxRuntimeExports.jsx('button', {
+                type: 'button',
+                'aria-label': 'outdent',
+                className: 'fx-outdent',
+                onClick: () => {
+                    tabKey(pos.root, true);
+                    bump((n) => n + 1);
+                },
+                children: '\u21e4',
+            }),
+            jsxRuntimeExports.jsx('button', {
+                type: 'button',
+                'aria-label': 'indent',
+                className: 'fx-indent',
+                onClick: () => {
+                    tabKey(pos.root, false);
+                    bump((n) => n + 1);
+                },
+                children: '\u21e5',
+            }),
+        ],
     });
 }
 const sameLines = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
@@ -2356,6 +2382,44 @@ function attachCommit(el, pref) {
         }
     });
 }
+/* ---- Tab in a piece ----
+   Tab at a caret writes a tab character. It goes through the normal typing path (insertText), so
+   draft mode's strike-instead-of-delete rules apply to it as to any letter.
+   Tab over a selection indents every paragraph the selection touches (a tab at each start);
+   Shift+Tab takes one leading tab off each of them, or off the caret's own paragraph.
+   The selection stays where it was, so Tab can be pressed again to go deeper. */
+function tabKey(root, back) {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    if (!back && range.collapsed) {
+        if (!document.execCommand('insertText', false, '\t')) insertPlain(root, '\t');
+        return;
+    }
+    const paras = [...root.children].filter((p) => range.intersectsNode(p));
+    if (!paras.length) return;
+    let changed = false;
+    for (const p of paras) {
+        // where the paragraph's text begins: its first character that isn't a line break,
+        // wherever it sits (it may be inside a struck or styled span)
+        const walk = document.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+        let at = null;
+        for (let n = walk.nextNode(); n && !at; n = walk.nextNode()) {
+            const i = n.data.search(/[^\n]/);
+            if (i >= 0) at = { t: n, i };
+        }
+        if (!back) {
+            if (at) at.t.insertData(at.i, '\t');
+            else p.appendChild(document.createTextNode('\t'));
+            changed = true;
+        } else if (at && at.t.data[at.i] === '\t') {
+            at.t.deleteData(at.i, 1);
+            changed = true;
+        }
+    }
+    // the page saves on input events; this edit bypassed typing, so announce it
+    if (changed) root.dispatchEvent(new Event('input', { bubbles: true }));
+}
 /* contentEditable regions capture their seed once per version identity so React
    re-renders never reconcile against browser-mutated DOM (which duplicates text) */
 
@@ -2386,21 +2450,10 @@ function EditableBody({ id, lines, register, onInput }) {
         ref: (el) => register(id, 'text', el),
         onInput: onInput,
         onKeyDown: (e) => {
-            // Tab writes a tab instead of leaving the text. It goes through the normal typing path
-            // (insertText), so draft mode's strike-instead-of-delete rules apply to it as to any letter.
-            // Shift+Tab still moves focus, so the keyboard is never trapped here.
-            if (
-                e.key !== 'Tab' ||
-                e.shiftKey ||
-                e.altKey ||
-                e.ctrlKey ||
-                e.metaKey ||
-                e.nativeEvent.isComposing
-            )
+            if (e.key !== 'Tab' || e.altKey || e.ctrlKey || e.metaKey || e.nativeEvent.isComposing)
                 return;
             e.preventDefault();
-            if (!document.execCommand('insertText', false, '\t'))
-                insertPlain(e.currentTarget, '\t');
+            tabKey(e.currentTarget, e.shiftKey);
         },
         children: (initial.length ? initial : ['']).map((line, i) =>
             jsxRuntimeExports.jsx(
