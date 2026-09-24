@@ -1023,7 +1023,8 @@ s.ov {
 }
 .face-upload-note {
     margin: 0 0 0.3em;
-    font-size: 0.72em;
+    font-size: 11px;
+    line-height: 1.3;
     opacity: 0.5;
 }
 .face-own {
@@ -1044,6 +1045,70 @@ s.ov {
 }
 .face-remove:hover {
     opacity: 0.9;
+}
+
+/* ---- main page (Cover): one centered column - project title, the · · mark, the folders ---- */
+.cover {
+    min-height: calc(100vh - var(--pin) - 120px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+}
+.cover-title {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-weight: 400;
+    font-size: var(--fs);
+    letter-spacing: 0.04em;
+    color: var(--ink);
+} /* title face */
+.cover-mark {
+    margin: 18px 0 26px;
+    opacity: 0.5;
+}
+.cover-folders {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+.cover-folder {
+    background: none;
+    border: 0;
+    padding: 2px 0;
+    color: var(--dim);
+    font: inherit;
+    font-size: var(--fs);
+    cursor: pointer;
+    transition: color 0.35s ease;
+}
+.cover-folder:hover,
+.cover-folder:focus-visible {
+    color: var(--ink);
+    outline: none;
+}
+.cover-folder-count {
+    margin-left: 0.6em;
+    font-size: 0.6em;
+    opacity: 0.6;
+    vertical-align: 0.2em;
+}
+/* inside a folder: the way back to the main page, small, above the pieces */
+.folder-crumb {
+    display: block;
+    margin: 0 0 28px;
+    background: none;
+    border: 0;
+    padding: 0;
+    color: var(--dim);
+    font: inherit;
+    font-size: 9.5pt;
+    cursor: pointer;
+}
+.folder-crumb:hover {
+    color: var(--ink);
 }
 
 /* standalone mirror: with no host header above the page, the top fade is the

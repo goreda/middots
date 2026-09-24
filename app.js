@@ -30,6 +30,10 @@ const PIECES = data.pieces.map((p) => ({
     ...p,
     audio: (p.audio ?? []).map((a) => ({ src: audioUrl(a.file), label: a.label })),
 }));
+const PROJECT = data.project;
+const FOLDERS = data.folders;
+/* which folder a piece lives in: its own "folder", or the first folder */
+const folderOf = (p) => p.folder ?? FOLDERS[0].id;
 
 /* ==========================================================================
  * sound - synthesized typewriter eras
@@ -1102,6 +1106,48 @@ function BlockText({ block, italics }) {
 }
 const ARCHIVE_SUMMARY =
     'unarchive of the writings on the inverted dream/wake state — pieces composed live, dream and wake states trading places until the cyclical phase unfolds. twenty-three so far, newest first. some have voice excerpts. each piece ends where it ends';
+/*
+ * Cover - the main page. The project title at the center, its folders under it.
+ * Minimal on purpose: the layout is a centered column and nothing else yet.
+ */
+function Cover({ onOpen }) {
+    return jsxRuntimeExports.jsxs('div', {
+        className: 'cover',
+        children: [
+            jsxRuntimeExports.jsx('h1', { className: 'cover-title', children: PROJECT.title }),
+            jsxRuntimeExports.jsx('p', {
+                className: 'cover-mark',
+                'aria-hidden': 'true',
+                children: '\u00B7 \u00B7',
+            }),
+            jsxRuntimeExports.jsx('nav', {
+                className: 'cover-folders',
+                'aria-label': 'folders',
+                children: FOLDERS.map((f) =>
+                    jsxRuntimeExports.jsxs(
+                        'button',
+                        {
+                            type: 'button',
+                            className: 'cover-folder',
+                            onClick: () => onOpen(f.id),
+                            children: [
+                                jsxRuntimeExports.jsx('span', {
+                                    className: 'cover-folder-title',
+                                    children: f.title,
+                                }),
+                                jsxRuntimeExports.jsx('span', {
+                                    className: 'cover-folder-count',
+                                    children: PIECES.filter((p) => folderOf(p) === f.id).length,
+                                }),
+                            ],
+                        },
+                        f.id,
+                    ),
+                ),
+            }),
+        ],
+    });
+}
 
 /* ---- archive end ---------------------------------------------------------
  * The closing middots of the archive; they unfold a short summary.
@@ -2326,6 +2372,12 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUp
         ],
     });
 }
+/* '#/<folder>' in the address -> that folder's id; null for anything else */
+function viewFromHash() {
+    const m = location.hash.match(/^#\/(.+)$/);
+    const id = m ? decodeURIComponent(m[1]) : '';
+    return FOLDERS.some((f) => f.id === id) ? id : null;
+}
 
 /* ---- App -----------------------------------------------------------------
  * Top-level state, effects and the control column. Effects are grouped:
@@ -2337,6 +2389,9 @@ function App() {
     const [indexPt, setIndexPt] = reactExports.useState(10);
     const [open, setOpen] = reactExports.useState(() => ({ [PIECES[0].id]: true }));
     const [mode, setMode] = reactExports.useState('read');
+    /* where the reader is: the main page ('home') or a folder id. Mirrored in the address as #/<folder>,
+       so a folder can be linked and the back button leaves it; saved with the rest of the state */
+    const [view, setView] = reactExports.useState(() => viewFromHash() ?? 'home');
     const [work, setWork] = reactExports.useState(null);
     const [lh, setLh] = reactExports.useState(1.42);
     const [seamH, setSeamH] = reactExports.useState(264);
@@ -2618,6 +2673,21 @@ function App() {
         if (bodyFace === slug) setBodyFace('eb-garamond');
         if (titleFace === slug) setTitleFace('fragment-mono');
     };
+    // view <-> address: #/<folder> for a folder, no hash for the main page
+    reactExports.useEffect(() => {
+        const want = view === 'home' ? '' : `#/${view}`;
+        if (location.hash !== want)
+            history.pushState(null, '', want || location.pathname + location.search);
+    }, [view]);
+    reactExports.useEffect(() => {
+        const onPop = () => setView(viewFromHash() ?? 'home');
+        window.addEventListener('popstate', onPop);
+        return () => window.removeEventListener('popstate', onPop);
+    }, []);
+    const openView = (next) => {
+        setView(next);
+        scrollerRef.current?.scrollTo({ top: 0 });
+    };
     const enterDraft = () => {
         setWork(
             (w) =>
@@ -2642,6 +2712,7 @@ function App() {
                     hasEndmark: true,
                 })),
         );
+        if (view === 'home') setView(FOLDERS[0].id); // drafts are worked on inside a folder
         setMode('draft');
     };
     const leaveDraft = () => {
@@ -2934,6 +3005,7 @@ function App() {
             ...makePayload(w ? harvestAll(w) : null),
             mode,
             open,
+            view,
             scroll: sc ? Math.round(sc.scrollTop) : 0,
         };
         storeSet(STATE_KEY, JSON.stringify(payload));
@@ -2958,6 +3030,13 @@ function App() {
                     if (typeof v === 'boolean') flags[id] = v;
                 setOpen(flags);
             }
+            // the page he was on, unless the address already names a folder
+            if (
+                !viewFromHash() &&
+                typeof data.view === 'string' &&
+                (data.view === 'home' || FOLDERS.some((f) => f.id === data.view))
+            )
+                setView(data.view);
             // scroll position: applied after the restored pieces have laid out (two frames)
             const top = typeof data.scroll === 'number' ? data.scroll : 0;
             if (top > 0)
@@ -2987,6 +3066,7 @@ function App() {
         work,
         mode,
         open,
+        view,
     ]);
     // edits in progress: save after a pause in typing, and when the page goes away
     reactExports.useEffect(() => {
@@ -3083,39 +3163,47 @@ function App() {
             jsxRuntimeExports.jsx('main', {
                 className: 'page',
                 children:
-                    mode === 'read'
-                        ? jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
-                              children: [
-                                  PIECES.map((p) =>
-                                      jsxRuntimeExports.jsx(
-                                          Story,
-                                          {
-                                              piece: p,
-                                              open: !!open[p.id],
-                                              onToggle: () => toggleFold(p.id),
-                                          },
-                                          p.id,
-                                      ),
-                                  ),
-                                  jsxRuntimeExports.jsx(ArchiveEnd, {}),
-                              ],
-                          })
-                        : (work ?? []).map((wp) =>
-                              jsxRuntimeExports.jsx(
-                                  WorkStory,
-                                  {
-                                      wp: wp,
-                                      open: !!open[wp.id],
-                                      onToggle: () => toggleFold(wp.id),
-                                      register: register,
-                                      onEditInput: stampEdit,
-                                      onLoadVersion: loadVersion,
-                                      onDuplicate: duplicateVersion,
-                                      onRemove: removeDraft,
-                                  },
-                                  wp.id,
-                              ),
-                          ),
+                    mode === 'read' && view === 'home'
+                        ? jsxRuntimeExports.jsx(Cover, { onOpen: openView })
+                        : mode === 'read'
+                          ? jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
+                                children: [
+                                    jsxRuntimeExports.jsx('button', {
+                                        type: 'button',
+                                        className: 'folder-crumb',
+                                        onClick: () => openView('home'),
+                                        children: PROJECT.title,
+                                    }),
+                                    PIECES.filter((p) => folderOf(p) === view).map((p) =>
+                                        jsxRuntimeExports.jsx(
+                                            Story,
+                                            {
+                                                piece: p,
+                                                open: !!open[p.id],
+                                                onToggle: () => toggleFold(p.id),
+                                            },
+                                            p.id,
+                                        ),
+                                    ),
+                                    jsxRuntimeExports.jsx(ArchiveEnd, {}),
+                                ],
+                            })
+                          : (work ?? []).map((wp) =>
+                                jsxRuntimeExports.jsx(
+                                    WorkStory,
+                                    {
+                                        wp: wp,
+                                        open: !!open[wp.id],
+                                        onToggle: () => toggleFold(wp.id),
+                                        register: register,
+                                        onEditInput: stampEdit,
+                                        onLoadVersion: loadVersion,
+                                        onDuplicate: duplicateVersion,
+                                        onRemove: removeDraft,
+                                    },
+                                    wp.id,
+                                ),
+                            ),
             }),
             mode === 'draft' && jsxRuntimeExports.jsx(FxPalette, {}),
             jsxRuntimeExports.jsxs('div', {

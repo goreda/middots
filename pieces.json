@@ -4,7 +4,17 @@
     "Both fronts are built from it: the hosted archive File bakes it in at build time,",
     "and the GitHub Pages site (goreda.github.io/middots) ships it as-is and loads it at runtime.",
     "Adding a piece = adding one entry at the top of \"pieces\" (newest first), then rebuilding both fronts.",
-    "Published pieces are immutable; revisions happen in the draft view, never here."
+    "Published pieces are immutable; revisions happen in the draft view, never here.",
+    "The \"project\" and \"folders\" entries shape the main page: the project title sits at the center, its folders are listed under it."
+  ],
+  "project": {
+    "title": "inverted dream/wake"
+  },
+  "folders": [
+    {
+      "id": "unarchive",
+      "title": "unarchive"
+    }
   ],
   "fields": {
     "id": "stable slug, used as the page anchor (#id) and as the key for drafts and versions",
@@ -15,7 +25,8 @@
     "endmark": "optional, true to close the piece with the · · end mark",
     "note": "optional line shown under the title, for how the piece was made",
     "audio": "voice recordings: file (path under audio/) and label; empty when there are none",
-    "blocks": "the text, one paragraph per entry, in reading order"
+    "blocks": "the text, one paragraph per entry, in reading order",
+    "folder": "optional, id of the folder the piece belongs to; omitted = the first folder"
   },
   "pieces": [
     {
@@ -112,10 +123,22 @@
       "when": "26.09.18 14:26",
       "endmark": true,
       "audio": [
-        {"file": "audio/whose-turn-part-one.mp3", "label": "voice, part one"},
-        {"file": "audio/whose-turn-part-two.mp3", "label": "voice, part two"},
-        {"file": "audio/whose-turn-first-take-one.mp3", "label": "first take (rejected), part one"},
-        {"file": "audio/whose-turn-first-take-two.mp3", "label": "first take (rejected), part two"}
+        {
+          "file": "audio/whose-turn-part-one.mp3",
+          "label": "voice, part one"
+        },
+        {
+          "file": "audio/whose-turn-part-two.mp3",
+          "label": "voice, part two"
+        },
+        {
+          "file": "audio/whose-turn-first-take-one.mp3",
+          "label": "first take (rejected), part one"
+        },
+        {
+          "file": "audio/whose-turn-first-take-two.mp3",
+          "label": "first take (rejected), part two"
+        }
       ],
       "blocks": [
         "At noon the market's mouths began arriving late. Fish was already wrapped when fi—sh came dragging out, wet at the edges; a laugh crossed three stalls before the throat that made it bent open. Nobody stared. They leaned closer, buying by breath.",
@@ -136,8 +159,14 @@
       "when": "26.09.18 14:08",
       "endmark": true,
       "audio": [
-        {"file": "audio/the-eleventh-part-one.mp3", "label": "voice, part one"},
-        {"file": "audio/the-eleventh-part-two.mp3", "label": "voice, part two"}
+        {
+          "file": "audio/the-eleventh-part-one.mp3",
+          "label": "voice, part one"
+        },
+        {
+          "file": "audio/the-eleventh-part-two.mp3",
+          "label": "voice, part two"
+        }
       ],
       "blocks": [
         "Of the eleven who waited, only ten were ever counted, and the eleventh began to live off the difference.",
@@ -160,7 +189,10 @@
       "when": "26.09.18 12:32",
       "endmark": true,
       "audio": [
-        {"file": "audio/yanlis-kisi.mp3", "label": "voice"}
+        {
+          "file": "audio/yanlis-kisi.mp3",
+          "label": "voice"
+        }
       ],
       "blocks": [
         "Gece, apartmanın üçüncü katında yanlış kişiye oldu.",
@@ -433,8 +465,14 @@
       "when": "26.09.17 21:13",
       "note": "the full turkish reading was never recorded; two excerpts remain",
       "audio": [
-        {"file": "audio/son-durak-excerpt-one.mp3", "label": "voice, excerpt one"},
-        {"file": "audio/son-durak-excerpt-two.mp3", "label": "voice, excerpt two"}
+        {
+          "file": "audio/son-durak-excerpt-one.mp3",
+          "label": "voice, excerpt one"
+        },
+        {
+          "file": "audio/son-durak-excerpt-two.mp3",
+          "label": "voice, excerpt two"
+        }
       ],
       "blocks": [
         "Maral her gece ikiyi on üç geçe boş otobüsü son durağa sürer, iki kapıyı da açardı. Binen olmazdı. Yine de gövde bazen hafifçe çöker, sanki görünmeyen bir ağırlık basamaklardan çıkıp arka koltuklardan birine otururdu.",
@@ -542,7 +580,10 @@
       "when": "26.09.17 19:24",
       "note": "voiced in english as seventy-five excerpts; its turkish text version is son durak, below",
       "audio": [
-        {"file": "audio/the-last-stop.mp3", "label": "voice, the delivered excerpts in order"}
+        {
+          "file": "audio/the-last-stop.mp3",
+          "label": "voice, the delivered excerpts in order"
+        }
       ],
       "blocks": [
         "Every night at two thirteen, Mara drove the empty bus to the last stop and opened both doors for a passenger who had died eleven years ago. Not because she believed in ghosts. Because once, in winter, she had closed them too soon.",
@@ -631,7 +672,10 @@
       "title": "the first thing he learned",
       "when": "26.09.17 19:08",
       "audio": [
-        {"file": "audio/kettle-chair-window.mp3", "label": "voice, full piece"}
+        {
+          "file": "audio/kettle-chair-window.mp3",
+          "label": "voice, full piece"
+        }
       ],
       "blocks": [
         "The first thing he learned was not to look directly at things. The chair stayed a chair only while he watched it, and the kettle, left unwatched, hummed a note from a song he had almost remembered.",
