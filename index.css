@@ -1067,9 +1067,10 @@ s.ov {
 
 /* ---- main page (Cover): one column, centered across, on the horizon - the folders, then + for a new one ---- */
 .cover {
-    /* on the horizon: the first folder starts where the top fade ends (the page itself starts at the
-       pin line, so move by the difference; follows the fade buttons) */
-    margin-top: calc(var(--vt) + var(--seam-h) - var(--pin));
+    /* on the horizon: the first folder's baseline is the baseline of a folder's first line of text.
+       The page starts at the pin line; a piece's first line sits there on a wide screen, so no offset.
+       On a phone the piece's head (title + date, then 16px) comes first - see the media rule below. */
+    margin-top: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1084,7 +1085,8 @@ s.ov {
 .cover-folder {
     background: none;
     border: 0;
-    padding: 2px 0;
+    padding: 0;
+    line-height: var(--lh); /* same line box as the text, so the baselines meet */
     color: var(--dim);
     font: inherit;
     font-size: var(--fs);
@@ -1103,7 +1105,6 @@ s.ov {
     vertical-align: 0.2em;
 }
 .cover-add {
-    margin-top: 22px;
     background: none;
     border: 0;
     padding: 2px 10px;
@@ -1125,25 +1126,31 @@ s.ov {
 }
 .cover-new {
     margin-top: 22px;
+    min-height: 1.4em;
 }
+/* naming a folder: no line, no placeholder - the text and a blinking crimson caret, nothing else */
 .cover-name {
-    width: min(260px, 70vw);
+    min-width: 1ch;
+    max-width: 70vw;
     background: transparent;
     border: 0;
-    border-bottom: 1px solid var(--hairline);
     color: var(--ink);
     font: inherit;
     font-size: var(--fs);
     text-align: center;
     padding: 2px 0;
     outline: none;
+    caret-color: #dc143c;
 }
-.cover-name:focus {
-    border-bottom-color: var(--dim);
+.cover-folder {
+    -webkit-touch-callout: none;
+    user-select: none;
 }
-.cover-name::placeholder {
-    color: var(--dim);
-    opacity: 0.5;
+@media (max-width: 700px) {
+    /* phone: a piece's text starts under its head (two mono lines + 8px of padding, then 16px), so the folders do too */
+    .cover {
+        margin-top: calc(2 * 1.42 * var(--fs-mono) + 8px + 16px);
+    }
 }
 
 /* ---- sync: code field and join button, in the same panel style as the face list ---- */

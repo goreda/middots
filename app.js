@@ -1308,16 +1308,42 @@ const ARCHIVE_SUMMARY =
     'unarchive of the writings on the inverted dream/wake state — pieces composed live, dream and wake states trading places until the cyclical phase unfolds. twenty-three so far, newest first. some have voice excerpts. each piece ends where it ends';
 /*
  * Cover - the main page: the folders in one centered column, and a + under them.
- * The + turns into a name field; Enter makes a new, empty folder and opens it.
- * Folders from pieces.json come first; folders made on the page follow (kept in the saved state).
+ * The + turns into a bare name field (just the crimson caret); Enter makes the folder and opens it in
+ * draft mode with a new piece. A folder's name is edited in the same field: double-click it, or hold
+ * it on a phone. Folders from pieces.json come first; folders made on the page follow.
  */
-function Cover({ folders, onOpen, onCreate }) {
-    const [naming, setNaming] = reactExports.useState(false);
-    const [name, setName] = reactExports.useState('');
-    const done = () => {
-        setNaming(false);
-        setName('');
+function NameField({ initial, onDone }) {
+    const [name, setName] = reactExports.useState(initial);
+    const finish = (keep) => onDone(keep && name.trim() ? name.trim() : null);
+    return jsxRuntimeExports.jsx('input', {
+        className: 'cover-name',
+        autoFocus: true,
+        value: name,
+        maxLength: 60,
+        size: Math.max(1, name.length + 1),
+        'aria-label': 'folder name',
+        onFocus: (e) => e.currentTarget.setSelectionRange(name.length, name.length),
+        onChange: (e) => setName(e.target.value),
+        onKeyDown: (e) => {
+            if (e.key === 'Enter') finish(true);
+            if (e.key === 'Escape') finish(false);
+        },
+        onBlur: () => finish(!!initial),
+    });
+}
+function Cover({ folders, count, onOpen, onCreate, onRename }) {
+    const [naming, setNaming] = reactExports.useState(false); // the + is a name field
+    const [editing, setEditing] = reactExports.useState(null); // a folder being renamed
+    const hold = reactExports.useRef(undefined);
+    const held = reactExports.useRef(false);
+    const press = (id) => {
+        held.current = false;
+        hold.current = window.setTimeout(() => {
+            held.current = true;
+            setEditing(id);
+        }, 550);
     };
+    const release = () => window.clearTimeout(hold.current);
     return jsxRuntimeExports.jsxs('div', {
         className: 'cover',
         children: [
@@ -1325,57 +1351,64 @@ function Cover({ folders, onOpen, onCreate }) {
                 className: 'cover-folders',
                 'aria-label': 'folders',
                 children: folders.map((f) =>
-                    jsxRuntimeExports.jsxs(
-                        'button',
-                        {
-                            type: 'button',
-                            className: 'cover-folder',
-                            onClick: () => onOpen(f.id),
-                            children: [
-                                jsxRuntimeExports.jsx('span', {
-                                    className: 'cover-folder-title',
-                                    children: f.title,
-                                }),
-                                jsxRuntimeExports.jsx('span', {
-                                    className: 'cover-folder-count',
-                                    children: PIECES.filter((p) => folderOf(p) === f.id).length,
-                                }),
-                            ],
-                        },
-                        f.id,
-                    ),
+                    editing === f.id
+                        ? jsxRuntimeExports.jsx(
+                              NameField,
+                              {
+                                  initial: f.title,
+                                  onDone: (n) => {
+                                      if (n) onRename(f.id, n);
+                                      setEditing(null);
+                                  },
+                              },
+                              f.id,
+                          )
+                        : jsxRuntimeExports.jsxs(
+                              'button',
+                              {
+                                  type: 'button',
+                                  className: 'cover-folder',
+                                  onClick: () => {
+                                      if (!held.current) onOpen(f.id);
+                                  },
+                                  onDoubleClick: () => setEditing(f.id),
+                                  onPointerDown: () => press(f.id),
+                                  onPointerUp: release,
+                                  onPointerLeave: release,
+                                  onContextMenu: (e) => e.preventDefault(),
+                                  children: [
+                                      jsxRuntimeExports.jsx('span', {
+                                          className: 'cover-folder-title',
+                                          children: f.title,
+                                      }),
+                                      jsxRuntimeExports.jsx('span', {
+                                          className: 'cover-folder-count',
+                                          children: count(f.id),
+                                      }),
+                                  ],
+                              },
+                              f.id,
+                          ),
                 ),
             }),
-            naming
-                ? jsxRuntimeExports.jsx('div', {
-                      className: 'cover-new',
-                      children: jsxRuntimeExports.jsx('input', {
-                          className: 'cover-name',
-                          autoFocus: true,
-                          value: name,
-                          maxLength: 60,
-                          placeholder: 'name',
-                          'aria-label': 'new folder name',
-                          onChange: (e) => setName(e.target.value),
-                          onKeyDown: (e) => {
-                              if (e.key === 'Enter' && name.trim()) {
-                                  onCreate(name.trim());
-                                  done();
-                              }
-                              if (e.key === 'Escape') done();
+            jsxRuntimeExports.jsx('div', {
+                className: 'cover-new',
+                children: naming
+                    ? jsxRuntimeExports.jsx(NameField, {
+                          initial: '',
+                          onDone: (n) => {
+                              setNaming(false);
+                              if (n) onCreate(n);
                           },
-                          onBlur: () => {
-                              if (!name.trim()) done();
-                          },
+                      })
+                    : jsxRuntimeExports.jsx('button', {
+                          type: 'button',
+                          className: 'cover-add',
+                          'aria-label': 'new folder',
+                          onClick: () => setNaming(true),
+                          children: '+',
                       }),
-                  })
-                : jsxRuntimeExports.jsx('button', {
-                      type: 'button',
-                      className: 'cover-add',
-                      'aria-label': 'new folder',
-                      onClick: () => setNaming(true),
-                      children: '+',
-                  }),
+            }),
         ],
     });
 }
@@ -2798,9 +2831,27 @@ function App() {
                 .slice(0, 24) || 'folder';
         const id = `f-${slug}-${Date.now().toString(36)}`;
         setOwnFolders((fs) => [...fs, { id, title }]);
-        setView(id);
-        scrollerRef.current?.scrollTo({ top: 0 });
+        // a new folder opens straight into draft mode with a new piece, caret in its text
+        enterDraft(id);
+        addDraft(id);
     };
+    /* rename a folder (any folder, pieces.json ones included): kept as a name override in the saved state */
+    const [folderNames, setFolderNames] = reactExports.useState({});
+    const renameFolder = (id, title) => setFolderNames((m) => ({ ...m, [id]: title }));
+    const named = (f) => (folderNames[f.id] ? { ...f, title: folderNames[f.id] } : f);
+    /* opening a folder: one with nothing published in it (a folder made on the page) opens in draft mode,
+       with a new piece if it holds no drafts yet; the others open for reading */
+    const openFolder = (id) => {
+        if (PIECES.some((p) => folderOf(p) === id)) {
+            openView(id);
+            return;
+        }
+        enterDraft(id);
+        if (!(workRef.current ?? []).some((wp) => wp.folder === id)) addDraft(id);
+    };
+    const folderCount = (id) =>
+        PIECES.filter((p) => folderOf(p) === id).length +
+        (work ?? []).filter((wp) => wp.folder === id && !wp.published).length;
     const [work, setWork] = reactExports.useState(null);
     const [lh, setLh] = reactExports.useState(1.42);
     const [seamH, setSeamH] = reactExports.useState(264);
@@ -3105,11 +3156,17 @@ function App() {
         return () => window.removeEventListener('popstate', onPop);
     }, []);
     const onCover = mode === 'read' && view === 'home'; // the main page: folders only
+    // the main page is never in draft mode: arriving there (back button, address) closes the drafts first
+    reactExports.useEffect(() => {
+        if (view === 'home' && mode === 'draft') leaveDraft();
+    }, [view, mode]);
     const openView = (next) => {
         setView(next);
         scrollerRef.current?.scrollTo({ top: 0 });
     };
-    const enterDraft = () => {
+    /* draft mode, inside a folder: the current one, or `into` (a folder just made). From the main page it
+       opens the first folder. Only the pieces of that folder are shown (see the draft list below). */
+    const enterDraft = (into) => {
         setWork(
             (w) =>
                 w ??
@@ -3131,9 +3188,11 @@ function App() {
                     audio: p.audio,
                     note: p.note,
                     hasEndmark: true,
+                    folder: folderOf(p),
                 })),
         );
-        if (view === 'home') setView(FOLDERS[0].id); // drafts are worked on inside a folder
+        if (into) setView(into);
+        else if (view === 'home') setView(FOLDERS[0].id); // drafts are worked on inside a folder
         setMode('draft');
     };
     const leaveDraft = () => {
@@ -3209,7 +3268,8 @@ function App() {
                   }),
         );
     };
-    const addDraft = () => {
+    const addDraft = (into) => {
+        const folder = into ?? (view === 'home' ? FOLDERS[0].id : view);
         const stamp = nowStamp();
         const id = `draft-${Date.now()}`;
         setOpen((prev) => ({ ...prev, [id]: true }));
@@ -3224,6 +3284,7 @@ function App() {
                 seat: 0,
                 audio: [],
                 hasEndmark: false,
+                folder,
             },
             ...(w ?? []),
         ]);
@@ -3272,10 +3333,11 @@ function App() {
         pieces:
             harvested === null
                 ? null
-                : harvested.map(({ id, published, versions, current }) => ({
+                : harvested.map(({ id, published, versions, current, folder }) => ({
                       id,
                       title: versions[current].title,
                       published,
+                      folder,
                       versions: versions.map(({ vid, when, born, title, lines, original }) => ({
                           vid,
                           when,
@@ -3363,6 +3425,13 @@ function App() {
                               audio: published && src ? src.audio : [],
                               note: published && src ? src.note : undefined,
                               hasEndmark: published,
+                              // published pieces live where pieces.json puts them; drafts keep the folder they were made in
+                              folder:
+                                  published && src
+                                      ? folderOf(src)
+                                      : typeof p.folder === 'string'
+                                        ? p.folder
+                                        : FOLDERS[0].id,
                           };
                       });
             const s = data.settings ?? {};
@@ -3428,6 +3497,7 @@ function App() {
             open,
             view,
             folders: ownFolders,
+            folderNames,
             scroll: sc ? Math.round(sc.scrollTop) : 0,
         };
         storeSet(STATE_KEY, JSON.stringify(payload));
@@ -3454,6 +3524,12 @@ function App() {
         // the page he was on, unless the address already names a folder
         const own = readFolders(data.folders);
         setOwnFolders(own);
+        const names = {};
+        if (data.folderNames && typeof data.folderNames === 'object') {
+            for (const [id, t] of Object.entries(data.folderNames))
+                if (typeof t === 'string' && t.trim()) names[id] = t;
+        }
+        setFolderNames(names);
         const fromHash = viewFromHash(own);
         if (fromHash) setView(fromHash);
         else if (
@@ -3506,6 +3582,7 @@ function App() {
         open,
         view,
         ownFolders,
+        folderNames,
     ]);
     // edits in progress: save after a pause in typing, and when the page goes away
     reactExports.useEffect(() => {
@@ -3611,9 +3688,11 @@ function App() {
                 children:
                     mode === 'read' && view === 'home'
                         ? jsxRuntimeExports.jsx(Cover, {
-                              folders: allFolders,
-                              onOpen: openView,
+                              folders: allFolders.map(named),
+                              count: folderCount,
+                              onOpen: openFolder,
                               onCreate: createFolder,
+                              onRename: renameFolder,
                           })
                         : mode === 'read'
                           ? jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
@@ -3632,22 +3711,24 @@ function App() {
                                     view === FOLDERS[0].id && jsxRuntimeExports.jsx(ArchiveEnd, {}),
                                 ],
                             })
-                          : (work ?? []).map((wp) =>
-                                jsxRuntimeExports.jsx(
-                                    WorkStory,
-                                    {
-                                        wp: wp,
-                                        open: !!open[wp.id],
-                                        onToggle: () => toggleFold(wp.id),
-                                        register: register,
-                                        onEditInput: stampEdit,
-                                        onLoadVersion: loadVersion,
-                                        onDuplicate: duplicateVersion,
-                                        onRemove: removeDraft,
-                                    },
-                                    wp.id,
+                          : (work ?? [])
+                                .filter((wp) => wp.folder === view)
+                                .map((wp) =>
+                                    jsxRuntimeExports.jsx(
+                                        WorkStory,
+                                        {
+                                            wp: wp,
+                                            open: !!open[wp.id],
+                                            onToggle: () => toggleFold(wp.id),
+                                            register: register,
+                                            onEditInput: stampEdit,
+                                            onLoadVersion: loadVersion,
+                                            onDuplicate: duplicateVersion,
+                                            onRemove: removeDraft,
+                                        },
+                                        wp.id,
+                                    ),
                                 ),
-                            ),
             }),
             mode === 'draft' && jsxRuntimeExports.jsx(FxPalette, {}),
             jsxRuntimeExports.jsxs('div', {
@@ -3733,7 +3814,7 @@ function App() {
                                     type: 'button',
                                     'aria-label': 'new piece',
                                     'data-tip': 'new piece',
-                                    onClick: addDraft,
+                                    onClick: () => addDraft(),
                                     children: jsxRuntimeExports.jsx('svg', {
                                         width: '14',
                                         height: '14',
