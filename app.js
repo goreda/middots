@@ -5,6 +5,22 @@ import {
     c as createRoot,
 } from './vendor.js';
 
+/*
+ * host - what the page is allowed to do where it runs.
+ *
+ * The same source builds two fronts. The hosted archive File runs inside a
+ * sandboxed viewer frame with no storage and no downloads, so there settings and
+ * drafts live only for the visit and "save file" goes through a helper tab.
+ * The GitHub Pages mirror is a normal page: the mirror build flips STANDALONE to
+ * true, which turns on saving settings and drafts in localStorage and a direct
+ * file download for "save file".
+ */
+/* localStorage key for the saved state (settings, drafts, mode) on the mirror */
+const STATE_KEY = 'middots-state';
+/* the sync service (service/ in the repo, a Cloudflare Worker); '' turns syncing off.
+   The archive File never syncs: its viewer allows no outside requests or storage. */
+const SYNC_URL = 'https://middots-sync.middots.workers.dev';
+
 /* ==========================================================================
  * pieces - loads the archive content
  * --------------------------------------------------------------------------
@@ -16,20 +32,53 @@ import {
  * optional flags, note and voice recordings. Rendering lives in App.
  * ========================================================================== */
 
-// Mirror build of the pieces module: same exports as the archive File's version,
-// but the text is loaded at runtime from pieces.json instead of being bundled.
 // Top-level await: App imports PIECES as a plain array, so the module holds the
 // page back until the data has arrived. pieces.json sits next to index.html.
+//
+// Privacy: the public pieces.json carries only the project and its folders; its "pieces" list is
+// empty, so a stranger opens an empty shelf. The published texts and recordings live encrypted in
+// the owner's sync bucket (service/src/worker.ts, GET /archive and /audio) and are loaded here only
+// when this browser has joined with that code.
 const response = await fetch(new URL('./pieces.json', import.meta.url));
 if (!response.ok) throw new Error(`pieces.json: HTTP ${response.status}`);
 const data = await response.json();
-// Recordings are published flat next to index.html, so "audio/x.mp3" -> "./x.mp3".
-const audioUrl = (file) => new URL('./' + file.split('/').pop(), import.meta.url).href;
-/* All published pieces, newest first. */
-const PIECES = data.pieces.map((p) => ({
+const TOKEN_KEY$1 = 'middots-sync-token'; // the same key sync.ts keeps its token under
+const token$1 = () => {
+    try {
+        return localStorage.getItem(TOKEN_KEY$1) ?? '';
+    } catch {
+        return '';
+    }
+};
+// Recordings stream from the bucket; <audio> can't send headers, so the token rides in the query.
+const audioUrl = (file) =>
+    `${SYNC_URL}/audio/${encodeURIComponent(file.split('/').pop() ?? '')}?t=${encodeURIComponent(token$1())}`;
+const toPiece = (p) => ({
     ...p,
     audio: (p.audio ?? []).map((a) => ({ src: audioUrl(a.file), label: a.label })),
-}));
+});
+/* All published pieces, newest first. One array for the page's whole life: joining fills it in
+   place and leaving empties it, so every render reads the current shelf. */
+const PIECES = data.pieces.map(toPiece);
+/* Fetch the private pieces for the joined code; an unjoined or empty code leaves the shelf as is. */
+async function loadPrivate() {
+    if (!token$1()) return;
+    try {
+        const r = await fetch(`${SYNC_URL}/archive`, {
+            headers: { Authorization: `Bearer ${token$1()}` },
+        });
+        if (!r.ok) return;
+        const a = await r.json();
+        PIECES.splice(0, PIECES.length, ...a.pieces.map(toPiece));
+    } catch {
+        /* offline: stay with what we have */
+    }
+}
+/* After leaving: back to the public, empty shelf. */
+function clearPrivate() {
+    PIECES.splice(0, PIECES.length, ...data.pieces.map(toPiece));
+}
+await loadPrivate();
 data.project;
 const FOLDERS = data.folders;
 /* which folder a piece lives in: its own "folder", or the first folder */
@@ -797,22 +846,6 @@ function loadFace(face, withItalic = true) {
 const UPLOADED = [];
 const faceBySlug = (slug) =>
     FACES.find((f) => f.slug === slug) ?? UPLOADED.find((f) => f.slug === slug);
-
-/*
- * host - what the page is allowed to do where it runs.
- *
- * The same source builds two fronts. The hosted archive File runs inside a
- * sandboxed viewer frame with no storage and no downloads, so there settings and
- * drafts live only for the visit and "save file" goes through a helper tab.
- * The GitHub Pages mirror is a normal page: the mirror build flips STANDALONE to
- * true, which turns on saving settings and drafts in localStorage and a direct
- * file download for "save file".
- */
-/* localStorage key for the saved state (settings, drafts, mode) on the mirror */
-const STATE_KEY = 'middots-state';
-/* the sync service (service/ in the repo, a Cloudflare Worker); '' turns syncing off.
-   The archive File never syncs: its viewer allows no outside requests or storage. */
-const SYNC_URL = 'https://middots-sync.middots.workers.dev';
 
 /*
  * sync - the page's side of the sync service (service/src/worker.ts in the repo).
@@ -2670,6 +2703,7 @@ function SyncControl({ onJoined, onLeft }) {
             setCode('');
             setAskClaim(false);
             setNote(r.created ? 'code claimed, synced' : 'joined, synced');
+            await loadPrivate();
             onJoined();
             return;
         }
@@ -2728,6 +2762,7 @@ function SyncControl({ onJoined, onLeft }) {
                                           )
                                               return;
                                           leave();
+                                          clearPrivate();
                                           onLeft();
                                       },
                                       children: 'leave',
@@ -2830,7 +2865,9 @@ function App() {
     const [inverted, setInverted] = reactExports.useState(() => storeGet('wt-invert') === '1');
     const [textPt, setTextPt] = reactExports.useState(19);
     const [indexPt, setIndexPt] = reactExports.useState(10);
-    const [open, setOpen] = reactExports.useState(() => ({ [PIECES[0].id]: true }));
+    const [open, setOpen] = reactExports.useState(() =>
+        PIECES[0] ? { [PIECES[0].id]: true } : {},
+    );
     const [mode, setMode] = reactExports.useState('read');
     /* where the reader is: the main page ('home') or a folder id. Mirrored in the address as #/<folder>,
        so a folder can be linked and the back button leaves it; saved with the rest of the state */

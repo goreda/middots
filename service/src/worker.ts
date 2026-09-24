@@ -27,6 +27,8 @@
  *   b:<bucket>:state          the latest state: rev (a counter), saved time, state
  *   b:<bucket>:fonts          the list of uploaded fonts
  *   b:<bucket>:font:<slug>    one uploaded font (bytes)
+ *   b:<bucket>:archive        the reader's pieces (pieces.json shape)
+ *   b:<bucket>:audio:<file>   a recording's size and slicing; :audio:<file>:<i> holds slice i
  *   lock:<ip>, lock:all       guessing limits (expire on their own)
  *
  * Endpoints (JSON; everything but /join needs "Authorization: Bearer <token>")
@@ -38,6 +40,15 @@
  *   GET    /fonts/<slug>    -> the font bytes
  *   PUT    /fonts/<slug>?name=&file=   body: font bytes
  *   DELETE /fonts/<slug>
+ *   GET    /archive         -> the reader's own pieces (pieces.json shape); 404 when the code has none
+ *   PUT    /archive         body: that JSON
+ *   GET    /audio/<file>?t=<token>   a recording, in 1 MB slices (HTTP Range, 206). The token rides in the
+ *                           query because an <audio> element can't send headers; no Origin is needed here
+ *   PUT    /audio/<file>/<i>    one encrypted 1 MB slice; PUT /audio/<file> {size, chunk, n} finishes it
+ *
+ * Private archive
+ *   The published pieces and their recordings are not in the public site. They live in the owner's
+ *   bucket (encrypted like everything else) and reach a page only after it has joined with that code.
  *
  * Free-plan note: Workers KV on the free plan allows 1,000 writes a day for the
  * whole service; the page batches its saves to stay far below that.
@@ -52,6 +63,7 @@ export interface Env {
 }
 
 const MAX_FONT = 10 * 1024 * 1024;
+const CHUNK = 1024 * 1024; // recordings are stored and served in slices this big, so no request decrypts a whole file
 const enc = new TextEncoder();
 
 /* ---- small helpers ---- */
@@ -87,8 +99,8 @@ async function hmacHex(secret: string, msg: string) {
     return hex(await crypto.subtle.sign('HMAC', key, enc.encode(msg)));
 }
 interface Device { bucket: string; key: CryptoKey }
-async function device(env: Env, req: Request): Promise<Device | null> {
-    const [bucket, k, sig] = (req.headers.get('Authorization') ?? '').replace(/^Bearer /, '').split('.');
+async function device(env: Env, req: Request, token?: string): Promise<Device | null> {
+    const [bucket, k, sig] = (token ?? (req.headers.get('Authorization') ?? '').replace(/^Bearer /, '')).split('.');
     if (!bucket || !k || !sig || !same(sig, await hmacHex(env.TOKEN_SECRET, `${bucket}.${k}`))) return null;
     return { bucket, key: await crypto.subtle.importKey('raw', unb64(k.replace(/-/g, '+').replace(/_/g, '/')), 'AES-GCM', false, ['encrypt', 'decrypt']) };
 }
@@ -199,10 +211,68 @@ async function fonts(env: Env, d: Device, req: Request, slug: string, h: Record<
     return json({ error: 'method' }, 405, h);
 }
 
+/* ---- the private archive: pieces and recordings ---- */
+async function archive(env: Env, d: Device, req: Request, h: Record<string, string>) {
+    if (req.method === 'GET') {
+        const a = await getJson<unknown>(env, d, 'archive');
+        return a ? json(a, 200, { ...h, 'Cache-Control': 'no-store' }) : json({ error: 'no archive' }, 404, h);
+    }
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object' || !Array.isArray((body as { pieces?: unknown }).pieces)) return json({ error: 'bad request' }, 400, h);
+    await putJson(env, d, 'archive', body);
+    return json({ ok: true }, 200, h);
+}
+
+interface AudioMeta { size: number; chunk: number; n: number }
+const AUDIO_NAME = /^[a-z0-9][a-z0-9._-]{0,90}\.mp3$/;
+
+async function putAudio(env: Env, d: Device, req: Request, file: string, part: string | undefined, h: Record<string, string>) {
+    if (!AUDIO_NAME.test(file)) return json({ error: 'bad name' }, 400, h);
+    if (part === undefined) { // the closing call: size and slicing
+        const m = (await req.json().catch(() => null)) as AudioMeta | null;
+        if (!m || !(m.size > 0) || m.chunk !== CHUNK || m.n !== Math.ceil(m.size / CHUNK)) return json({ error: 'bad meta' }, 400, h);
+        await putJson(env, d, `audio:${file}`, m);
+        return json({ ok: true }, 200, h);
+    }
+    const bytes = await req.arrayBuffer();
+    if (!/^\d{1,3}$/.test(part) || !bytes.byteLength || bytes.byteLength > CHUNK) return json({ error: 'bad slice' }, 400, h);
+    await env.SYNC.put(`b:${d.bucket}:audio:${file}:${part}`, await seal(d, bytes));
+    return json({ ok: true }, 200, h);
+}
+
+/* one slice per request: from the asked start to the end of its slice (a 206 may return less than asked;
+   the player asks again for the rest) */
+async function getAudio(env: Env, d: Device, req: Request, file: string) {
+    const plain = { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'private, max-age=86400' };
+    const m = AUDIO_NAME.test(file) ? await getJson<AudioMeta>(env, d, `audio:${file}`) : null;
+    if (!m) return new Response('not found', { status: 404, headers: plain });
+    const r = /bytes=(\d+)-(\d*)/.exec(req.headers.get('Range') ?? '');
+    const start = r ? Number(r[1]) : 0;
+    if (start >= m.size) return new Response(null, { status: 416, headers: { ...plain, 'Content-Range': `bytes */${m.size}` } });
+    const i = Math.floor(start / m.chunk);
+    const raw = await env.SYNC.get(`b:${d.bucket}:audio:${file}:${i}`, 'arrayBuffer');
+    if (!raw) return new Response('missing slice', { status: 500, headers: plain });
+    const slice = new Uint8Array(await unseal(d, raw));
+    const askedEnd = r && r[2] ? Number(r[2]) : m.size - 1;
+    const end = Math.min(askedEnd, i * m.chunk + slice.byteLength - 1);
+    const body = slice.slice(start - i * m.chunk, end - i * m.chunk + 1);
+    return new Response(body, {
+        status: 206,
+        headers: { ...plain, 'Content-Type': 'audio/mpeg', 'Accept-Ranges': 'bytes', 'Content-Range': `bytes ${start}-${end}/${m.size}`, 'Content-Length': String(body.byteLength) },
+    });
+}
+
 /* ---- routing ---- */
 export default {
     async fetch(req: Request, env: Env): Promise<Response> {
         const h = cors(env, req);
+        // recordings are fetched by <audio> itself: token in the query, no Origin header to check
+        const url = new URL(req.url);
+        const am = url.pathname.match(/^\/audio\/([^/]+)$/);
+        if (am && req.method === 'GET') {
+            const d = await device(env, req, url.searchParams.get('t') ?? '');
+            return d ? getAudio(env, d, req, am[1]) : new Response('not joined', { status: 401 });
+        }
         if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: h });
         if (!h['Access-Control-Allow-Origin']) return json({ error: 'origin' }, 403, h);
         const path = new URL(req.url).pathname.replace(/\/+$/, '');
@@ -213,6 +283,9 @@ export default {
         if (path === '/state' && req.method === 'PUT') return putState(env, d, req, h);
         const m = path.match(/^\/fonts(?:\/([^/]+))?$/);
         if (m) return fonts(env, d, req, m[1] ?? '', h);
+        if (path === '/archive' && (req.method === 'GET' || req.method === 'PUT')) return archive(env, d, req, h);
+        const up = path.match(/^\/audio\/([^/]+)(?:\/(\d+))?$/);
+        if (up && req.method === 'PUT') return putAudio(env, d, req, up[1], up[2], h);
         return json({ error: 'not found' }, 404, h);
     },
 };
