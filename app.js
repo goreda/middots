@@ -1611,6 +1611,22 @@ function Story({ piece, open, onToggle }) {
         ],
     });
 }
+/* snapshots: when a save finds a version changed, the text it is about to replace is kept as a past
+   self - at most one per SNAP_GAP, so a burst of typing leaves one snapshot, not hundreds. Newest
+   first, SNAP_MAX per version (the oldest drop off). */
+const SNAP_GAP = 10 * 60000;
+const SNAP_MAX = 60;
+function withSnap(v, now) {
+    const snaps = v.snaps ?? [];
+    if (!v.title && v.lines.every((l) => !l.trim())) return v.snaps; // a blank page is no past self
+    if (snaps[0] && now - snaps[0].t < SNAP_GAP) return v.snaps;
+    if (snaps[0] && snaps[0].title === v.title && sameLines(snaps[0].lines, v.lines))
+        return v.snaps;
+    return [{ at: v.when, t: now, title: v.title, lines: [...v.lines] }, ...snaps].slice(
+        0,
+        SNAP_MAX,
+    );
+}
 const nowStamp = () => {
     const d = new Date();
     const p = (n) => String(n).padStart(2, '0');
@@ -2473,9 +2489,18 @@ function WorkStory({
     onLoadVersion,
     onDuplicate,
     onRemove,
+    onRestore,
 }) {
     const v = wp.versions[wp.current];
     const [hoverV, setHoverV] = reactExports.useState(null);
+    // past selves: the list folds out under the text; peeking shows one in place of the editor
+    // (the editor stays mounted underneath, so its caret and DOM survive the peek)
+    const [pastOpen, setPastOpen] = reactExports.useState(false);
+    const [peek, setPeek] = reactExports.useState(null);
+    const snaps = v.snaps ?? [];
+    reactExports.useEffect(() => {
+        setPeek(null);
+    }, [wp.seat]);
     return jsxRuntimeExports.jsxs('section', {
         className: `story${open ? ' open' : ''} draft-story${PIECES.find((p) => p.id === wp.id)?.dialogue ? ' dialogue' : ''}`,
         id: wp.id,
@@ -2564,16 +2589,47 @@ function WorkStory({
                 children: jsxRuntimeExports.jsxs('div', {
                     className: 'story-body',
                     children: [
-                        jsxRuntimeExports.jsx(
-                            EditableBody,
-                            {
-                                id: wp.id,
-                                lines: v.lines,
-                                register: register,
-                                onInput: () => onEditInput(wp.id),
-                            },
-                            `b-${wp.seat}`,
-                        ),
+                        jsxRuntimeExports.jsx('div', {
+                            className: peek ? 'snap-hidden' : undefined,
+                            children: jsxRuntimeExports.jsx(
+                                EditableBody,
+                                {
+                                    id: wp.id,
+                                    lines: v.lines,
+                                    register: register,
+                                    onInput: () => onEditInput(wp.id),
+                                },
+                                `b-${wp.seat}`,
+                            ),
+                        }),
+                        peek &&
+                            jsxRuntimeExports.jsxs('div', {
+                                className: 'snap-peek',
+                                'aria-label': `past self, ${peek.at}`,
+                                children: [
+                                    jsxRuntimeExports.jsx('p', {
+                                        className: 'snap-peek-title',
+                                        children: peek.title || 'untitled',
+                                    }),
+                                    jsxRuntimeExports.jsx('div', {
+                                        className: 'story-text',
+                                        children: (peek.lines.length ? peek.lines : ['']).map(
+                                            (line, i) =>
+                                                jsxRuntimeExports.jsx(
+                                                    'p',
+                                                    {
+                                                        children: line
+                                                            ? jsxRuntimeExports.jsx(ParaText, {
+                                                                  text: line,
+                                                              })
+                                                            : null,
+                                                    },
+                                                    i,
+                                                ),
+                                        ),
+                                    }),
+                                ],
+                            }),
                         wp.audio.length > 0 &&
                             jsxRuntimeExports.jsx('div', {
                                 className: 'story-audio',
@@ -2594,6 +2650,68 @@ function WorkStory({
                             jsxRuntimeExports.jsx('p', {
                                 className: 'endmark',
                                 children: '\u00B7 \u00B7',
+                            }),
+                        snaps.length > 0 &&
+                            jsxRuntimeExports.jsxs('div', {
+                                className: `past${pastOpen ? ' open' : ''}`,
+                                children: [
+                                    jsxRuntimeExports.jsxs('button', {
+                                        type: 'button',
+                                        className: 'past-toggle',
+                                        'aria-expanded': pastOpen,
+                                        tabIndex: open ? 0 : -1,
+                                        onClick: () => {
+                                            setPastOpen(!pastOpen);
+                                            if (pastOpen) setPeek(null);
+                                        },
+                                        children: [
+                                            'past selves ',
+                                            jsxRuntimeExports.jsx('span', {
+                                                className: 'past-count',
+                                                children: snaps.length,
+                                            }),
+                                        ],
+                                    }),
+                                    pastOpen &&
+                                        jsxRuntimeExports.jsx('div', {
+                                            className: 'past-list',
+                                            children: snaps.map((sn) =>
+                                                jsxRuntimeExports.jsx(
+                                                    'button',
+                                                    {
+                                                        type: 'button',
+                                                        className: `past-date${peek === sn ? ' on' : ''}`,
+                                                        onClick: () =>
+                                                            setPeek(peek === sn ? null : sn),
+                                                        children: sn.at,
+                                                    },
+                                                    sn.t,
+                                                ),
+                                            ),
+                                        }),
+                                    peek &&
+                                        jsxRuntimeExports.jsxs('div', {
+                                            className: 'past-actions',
+                                            children: [
+                                                jsxRuntimeExports.jsx('button', {
+                                                    type: 'button',
+                                                    className: 'past-act',
+                                                    onClick: () => setPeek(null),
+                                                    children: 'back',
+                                                }),
+                                                jsxRuntimeExports.jsx('button', {
+                                                    type: 'button',
+                                                    className: 'past-act strong',
+                                                    onClick: () => {
+                                                        onRestore(wp.id, peek);
+                                                        setPeek(null);
+                                                        setPastOpen(false);
+                                                    },
+                                                    children: 'restore as new draft',
+                                                }),
+                                            ],
+                                        }),
+                                ],
                             }),
                     ],
                 }),
@@ -2794,14 +2912,221 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUp
         ],
     });
 }
-/*
- * SyncControl - join this device to the sync service with a code (sync.ts).
- * The first device to use a code claims it (asked once); later devices type the same code.
- */
-/* ---- the code field: one small box per character ----
+const fold = (t) =>
+    t
+        .replace(/[\uE000-\uF8FF]/g, '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/ı/g, 'i')
+        .replace(/İ/g, 'i')
+        .toLowerCase();
+/* NFD + dropping marks keeps the string's length for Latin text, so positions in the folded
+   copy are positions in the original (checked per line; a line where they differ is skipped) */
+function searchPieces(items, q) {
+    const needle = fold(q.trim());
+    if (needle.length < 2) return [];
+    const hits = [];
+    for (const it of items) {
+        const rows = [it.title, ...it.lines];
+        rows.forEach((raw, li) => {
+            const text = raw.replace(/[\uE000-\uF8FF]/g, '').replace(/\s/g, ' '); // one line in the results
+            const f = fold(text);
+            if (f.length !== text.length) return;
+            const at = f.indexOf(needle);
+            if (at < 0) return;
+            const a = Math.max(0, at - 36),
+                b = Math.min(text.length, at + needle.length + 48);
+            hits.push({
+                id: it.id,
+                folder: it.folder,
+                title: it.title || 'untitled',
+                line: li - 1,
+                at,
+                len: needle.length,
+                snippet: [
+                    (a > 0 ? '\u2026' : '') + text.slice(a, at),
+                    text.slice(at, at + needle.length),
+                    text.slice(at + needle.length, b) + (b < text.length ? '\u2026' : ''),
+                ],
+            });
+        });
+    }
+    return hits.slice(0, 40);
+}
+/* the hit's characters inside a rendered line: walk its text, skipping the markers the page doesn't show */
+function findInElement(el, h) {
+    const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) nodes.push(n);
+    const full = nodes.map((n) => n.data).join('');
+    const at = fold(full).length === full.length ? fold(full).indexOf(fold(h.snippet[1])) : -1;
+    if (at < 0) return null;
+    const r = document.createRange();
+    let pos = 0,
+        started = false;
+    for (const n of nodes) {
+        const end = pos + n.data.length;
+        if (!started && at < end) {
+            r.setStart(n, at - pos);
+            started = true;
+        }
+        if (started && at + h.len <= end) {
+            r.setEnd(n, at + h.len - pos);
+            return r;
+        }
+        pos = end;
+    }
+    return null;
+}
+function SearchControl({ items, onGo }) {
+    const [open, setOpen] = reactExports.useState(false);
+    const [q, setQ] = reactExports.useState('');
+    const [sel, setSel] = reactExports.useState(0);
+    const hits = open ? searchPieces(items(), q) : [];
+    const panelRef = reactExports.useRef(null);
+    const inputRef = reactExports.useRef(null);
+    reactExports.useEffect(() => {
+        const list = panelRef.current;
+        if (open && list && list.parentElement) placePanel(list, list.parentElement);
+    }, [open, q]);
+    reactExports.useEffect(() => {
+        if (open) inputRef.current?.focus();
+    }, [open]);
+    reactExports.useEffect(() => {
+        setSel(0);
+    }, [q]);
+    // Cmd/Ctrl+K opens search from anywhere (the browser's own find stays on Cmd/Ctrl+F)
+    reactExports.useEffect(() => {
+        const onKey = (e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+                e.preventDefault();
+                setOpen((o) => !o);
+            } else if (e.key === 'Escape') setOpen(false);
+        };
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+    }, []);
+    reactExports.useEffect(() => {
+        if (!open) return;
+        const onDoc = (e) => {
+            if (!e.target.closest('.search-widget')) setOpen(false);
+        };
+        document.addEventListener('mousedown', onDoc);
+        return () => document.removeEventListener('mousedown', onDoc);
+    }, [open]);
+    const go = (h) => {
+        if (!h) return;
+        setOpen(false);
+        onGo(h);
+    };
+    return jsxRuntimeExports.jsxs('div', {
+        className: 'face-widget search-widget',
+        children: [
+            open &&
+                jsxRuntimeExports.jsxs('div', {
+                    className: 'face-list search-panel',
+                    ref: panelRef,
+                    children: [
+                        jsxRuntimeExports.jsx('input', {
+                            ref: inputRef,
+                            className: 'search-field',
+                            'aria-label': 'search the pieces',
+                            placeholder: 'search',
+                            value: q,
+                            autoComplete: 'off',
+                            autoCapitalize: 'off',
+                            spellCheck: false,
+                            onChange: (e) => setQ(e.target.value),
+                            onKeyDown: (e) => {
+                                if (e.key === 'ArrowDown') {
+                                    e.preventDefault();
+                                    setSel((i) => Math.min(hits.length - 1, i + 1));
+                                } else if (e.key === 'ArrowUp') {
+                                    e.preventDefault();
+                                    setSel((i) => Math.max(0, i - 1));
+                                } else if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    go(hits[sel]);
+                                }
+                            },
+                        }),
+                        q.trim().length >= 2 &&
+                            jsxRuntimeExports.jsxs('div', {
+                                className: 'search-results',
+                                children: [
+                                    hits.length === 0 &&
+                                        jsxRuntimeExports.jsx('p', {
+                                            className: 'sync-note',
+                                            children: 'nothing',
+                                        }),
+                                    hits.map((h, i) =>
+                                        jsxRuntimeExports.jsxs(
+                                            'button',
+                                            {
+                                                type: 'button',
+                                                className: `search-hit${i === sel ? ' on' : ''}`,
+                                                onMouseEnter: () => setSel(i),
+                                                onClick: () => go(h),
+                                                children: [
+                                                    jsxRuntimeExports.jsx('span', {
+                                                        className: 'search-hit-title',
+                                                        children: h.title,
+                                                    }),
+                                                    jsxRuntimeExports.jsxs('span', {
+                                                        className: 'search-hit-line',
+                                                        children: [
+                                                            h.snippet[0],
+                                                            jsxRuntimeExports.jsx('mark', {
+                                                                children: h.snippet[1],
+                                                            }),
+                                                            h.snippet[2],
+                                                        ],
+                                                    }),
+                                                ],
+                                            },
+                                            `${h.id}-${h.line}-${i}`,
+                                        ),
+                                    ),
+                                ],
+                            }),
+                    ],
+                }),
+            jsxRuntimeExports.jsx('button', {
+                type: 'button',
+                className: open ? 'on' : '',
+                'aria-label': 'search',
+                'data-tip': open ? undefined : 'search',
+                'aria-expanded': open,
+                onClick: () => setOpen(!open),
+                children: jsxRuntimeExports.jsxs('svg', {
+                    width: '14',
+                    height: '14',
+                    viewBox: '0 0 14 14',
+                    'aria-hidden': 'true',
+                    children: [
+                        jsxRuntimeExports.jsx('circle', {
+                            cx: '6.1',
+                            cy: '6.1',
+                            r: '3.6',
+                            fill: 'none',
+                            stroke: 'currentColor',
+                            strokeWidth: '1.1',
+                        }),
+                        jsxRuntimeExports.jsx('path', {
+                            d: 'm8.8 8.8 3 3',
+                            stroke: 'currentColor',
+                            strokeWidth: '1.1',
+                        }),
+                    ],
+                }),
+            }),
+        ],
+    });
+}
+/* the code field: one small box per character ----
    A real (invisible) input lies over the boxes, so typing, pasting, the phone keyboard and password
    managers all work as usual; the boxes only draw it. Each character shows for a moment, then turns
-   into a middot. Letters and digits both count; a code is 4 to 64 of them. */
+   into a middot. Any typable sign counts - letters, digits, symbols, spaces; a code is 4 to 64 of them. */
 const PIN_MIN = 4;
 const PIN_MAX = 64;
 function PinField({ value, onChange, onEnter, label, shake }) {
@@ -2824,8 +3149,9 @@ function PinField({ value, onChange, onEnter, label, shake }) {
         return () => window.clearTimeout(t);
     }, [shown, value]);
     // the boxes: every typed character, plus the next empty one, never fewer than four
-    const boxes = Math.min(PIN_MAX, Math.max(PIN_MIN, value.length + 1));
-    const active = Math.min(value.length, PIN_MAX - 1);
+    const chars = Array.from(value); // by character, so an emoji or accented sign fills one box
+    const boxes = Math.min(PIN_MAX, Math.max(PIN_MIN, chars.length + 1));
+    const active = Math.min(chars.length, PIN_MAX - 1);
     return jsxRuntimeExports.jsxs('div', {
         className: `pin${shaking ? ' pin-shake' : ''}`,
         onClick: () => inputRef.current?.focus(),
@@ -2838,7 +3164,6 @@ function PinField({ value, onChange, onEnter, label, shake }) {
                 autoCapitalize: 'off',
                 autoCorrect: 'off',
                 spellCheck: false,
-                maxLength: PIN_MAX,
                 value: value,
                 onFocus: () => setFocused(true),
                 onBlur: () => setFocused(false),
@@ -2849,8 +3174,11 @@ function PinField({ value, onChange, onEnter, label, shake }) {
                     }
                 },
                 onChange: (e) => {
-                    const v = e.target.value.replace(/[^A-Za-z0-9]/g, '').slice(0, PIN_MAX);
-                    setShown(v.length > value.length ? v.length - 1 : -1); // only a freshly typed character shows
+                    const v = Array.from(e.target.value.replace(/[\u0000-\u001f\u007f]/g, ''))
+                        .slice(0, PIN_MAX)
+                        .join('');
+                    const n = Array.from(v).length;
+                    setShown(n > Array.from(value).length ? n - 1 : -1); // only a freshly typed character shows
                     onChange(v);
                 },
             }),
@@ -2858,11 +3186,11 @@ function PinField({ value, onChange, onEnter, label, shake }) {
                 className: 'pin-boxes',
                 'aria-hidden': 'true',
                 children: Array.from({ length: boxes }, (_, i) => {
-                    const ch = value[i];
+                    const ch = chars[i];
                     const cls = [
                         'pin-box',
                         ch ? 'filled' : '',
-                        focused && i === active && value.length < PIN_MAX ? 'active' : '',
+                        focused && i === active && chars.length < PIN_MAX ? 'active' : '',
                     ].join(' ');
                     return jsxRuntimeExports.jsx(
                         'span',
@@ -2887,6 +3215,19 @@ function PinField({ value, onChange, onEnter, label, shake }) {
         ],
     });
 }
+/* a word set in the code field's boxes, one letter each (spaces become gaps): the panel's submit
+   buttons wear it, so the action reads as part of the same row of little containers */
+function BoxWord({ word }) {
+    return jsxRuntimeExports.jsx('span', {
+        className: 'box-word',
+        'aria-hidden': 'true',
+        children: Array.from(word).map((ch, i) =>
+            ch === ' '
+                ? jsxRuntimeExports.jsx('span', { className: 'box-gap' }, i)
+                : jsxRuntimeExports.jsx('span', { className: 'pin-box', children: ch }, i),
+        ),
+    });
+}
 function SyncControl({ onJoined, onLeft, onRekeyed }) {
     const [open, setOpen] = reactExports.useState(false);
     const [code, setCode] = reactExports.useState('');
@@ -2901,7 +3242,7 @@ function SyncControl({ onJoined, onLeft, onRekeyed }) {
         setShake((n) => n + 1);
     };
     const go = async (claim) => {
-        if (code.length < PIN_MIN) {
+        if (Array.from(code).length < PIN_MIN) {
             nope('at least 4');
             return;
         }
@@ -2924,7 +3265,7 @@ function SyncControl({ onJoined, onLeft, onRekeyed }) {
         nope(r.error);
     };
     const next = async () => {
-        if (code.length < PIN_MIN) {
+        if (Array.from(code).length < PIN_MIN) {
             nope('at least 4');
             return;
         }
@@ -3022,13 +3363,8 @@ function SyncControl({ onJoined, onLeft, onRekeyed }) {
                                         type: 'button',
                                         className: 'face-choice',
                                         onClick: () => {
-                                            // leaving resets this device to a fresh page; asked once, since it can't be undone here
-                                            if (
-                                                !window.confirm(
-                                                    'leave sync? this device starts fresh: its drafts, folders, settings and fonts are cleared here. they stay safe on the code for your other devices.',
-                                                )
-                                            )
-                                                return;
+                                            // leaving resets this device to a fresh page, at once: nothing is lost, it all stays
+                                            // on the code, and joining again brings it back
                                             leave();
                                             clearPrivate();
                                             onLeft();
@@ -3077,9 +3413,13 @@ function SyncControl({ onJoined, onLeft, onRekeyed }) {
                                                 }),
                                                 jsxRuntimeExports.jsx('button', {
                                                     type: 'submit',
-                                                    className: 'face-choice face-upload',
-                                                    disabled: code.length < PIN_MIN,
-                                                    children: mode === 'new' ? 'next' : 'change',
+                                                    className: 'face-choice box-submit',
+                                                    'aria-label':
+                                                        mode === 'new' ? 'next' : 'change',
+                                                    disabled: Array.from(code).length < PIN_MIN,
+                                                    children: jsxRuntimeExports.jsx(BoxWord, {
+                                                        word: mode === 'new' ? 'next' : 'change',
+                                                    }),
                                                 }),
                                             ],
                                         }),
@@ -3106,9 +3446,12 @@ function SyncControl({ onJoined, onLeft, onRekeyed }) {
                                     }),
                                     jsxRuntimeExports.jsx('button', {
                                         type: 'submit',
-                                        className: 'face-choice face-upload',
-                                        disabled: code.length < PIN_MIN,
-                                        children: askClaim ? 'make it mine' : 'join',
+                                        className: 'face-choice box-submit',
+                                        'aria-label': askClaim ? 'make it mine' : 'join',
+                                        disabled: Array.from(code).length < PIN_MIN,
+                                        children: jsxRuntimeExports.jsx(BoxWord, {
+                                            word: askClaim ? 'make it mine' : 'join',
+                                        }),
                                     }),
                                     note &&
                                         jsxRuntimeExports.jsx('p', {
@@ -3513,9 +3856,12 @@ function App() {
         const cur = wp.versions[wp.current];
         if (title === cur.title && sameLines(lines, cur.lines)) return wp;
         if (cur.original) return wp; // originals never absorb edits; the first keystroke spawns a version instead
+        const snaps = withSnap(cur, Date.now());
         return {
             ...wp,
-            versions: wp.versions.map((v, i) => (i === wp.current ? { ...v, title, lines } : v)),
+            versions: wp.versions.map((v, i) =>
+                i === wp.current ? { ...v, title, lines, ...(snaps ? { snaps } : {}) } : v,
+            ),
         };
     };
     const harvestAll = (w) => w.map(harvestPiece);
@@ -3586,6 +3932,57 @@ function App() {
         setView(next);
         scrollerRef.current?.scrollTo({ top: 0 });
     };
+    /* search: the shelf as it stands - drafts in their current version once drafting has begun */
+    const searchItems = () => {
+        const w = workRef.current;
+        if (w)
+            return w.map((wp) => ({
+                id: wp.id,
+                folder: wp.folder,
+                title: wp.versions[wp.current].title,
+                lines: wp.versions[wp.current].lines,
+            }));
+        return PIECES.map((p) => ({
+            id: p.id,
+            folder: folderOf(p),
+            title: p.title,
+            lines: flatLines(p),
+        }));
+    };
+    /* a hit: open its folder and piece, then bring the matched line to the horizon and mark it */
+    const goToHit = (h) => {
+        if (view !== h.folder) setView(h.folder);
+        setOpen((o) => ({ ...o, [h.id]: true }));
+        window.setTimeout(() => {
+            const sc = scrollerRef.current;
+            const section = document.getElementById(h.id);
+            if (!sc || !section) return;
+            const target =
+                h.line < 0
+                    ? section.querySelector('.story-title')
+                    : section.querySelectorAll('.story-text > p')[h.line];
+            const el = target ?? section;
+            const pin =
+                parseFloat(getComputedStyle(document.querySelector('.page')).paddingTop) || 0;
+            const head = section.querySelector('.story-head');
+            const below = h.line < 0 || !head || window.innerWidth > 700 ? 0 : head.offsetHeight; // the phone's head sits above the text
+            sc.scrollTo({
+                top: Math.max(0, sc.scrollTop + el.getBoundingClientRect().top - pin - below - 24),
+                behavior: 'auto',
+            });
+            // mark the match itself (CSS Custom Highlight API where there is one; the line otherwise)
+            const reg = CSS.highlights;
+            const HL = window.Highlight;
+            const range = findInElement(el, h);
+            if (reg && HL && range) {
+                reg.set('search-hit', new HL(range));
+                window.setTimeout(() => reg.delete('search-hit'), 2600);
+            } else {
+                el.classList.add('search-flash');
+                window.setTimeout(() => el.classList.remove('search-flash'), 2600);
+            }
+        }, 60);
+    };
     /* draft mode, inside a folder: the current one, or `into` (a folder just made). From the main page it
        opens the first folder. Only the pieces of that folder are shown (see the draft list below). */
     const enterDraft = (into) => {
@@ -3651,6 +4048,32 @@ function App() {
             return next;
         });
         if (platenRef.current) window.requestAnimationFrame(() => platenFollow());
+    };
+    /* restore a past self: it comes back as a new version on top of the stack, so the current text
+       stays untouched in its own version (and keeps its own past selves) */
+    const restoreSnap = (id, snap) => {
+        const stamp = nowStamp();
+        setWork((w) =>
+            !w
+                ? w
+                : w.map((wp) => {
+                      if (wp.id !== id) return wp;
+                      const h = harvestPiece(wp);
+                      const back = {
+                          vid: newVid(),
+                          when: stamp,
+                          born: stamp,
+                          title: snap.title,
+                          lines: [...snap.lines],
+                      };
+                      return {
+                          ...h,
+                          versions: [back, ...h.versions],
+                          current: 0,
+                          seat: h.seat + 1,
+                      };
+                  }),
+        );
     };
     const loadVersion = (id, vIdx) => {
         setWork((w) =>
@@ -3761,14 +4184,17 @@ function App() {
                       title: versions[current].title,
                       published,
                       folder,
-                      versions: versions.map(({ vid, when, born, title, lines, original }) => ({
-                          vid,
-                          when,
-                          born,
-                          title,
-                          lines,
-                          ...(original ? { original: true } : {}),
-                      })),
+                      versions: versions.map(
+                          ({ vid, when, born, title, lines, original, snaps }) => ({
+                              vid,
+                              when,
+                              born,
+                              title,
+                              lines,
+                              ...(original ? { original: true } : {}),
+                              ...(snaps?.length ? { snaps } : {}),
+                          }),
+                      ),
                       current,
                   })),
     });
@@ -3807,6 +4233,19 @@ function App() {
                               original:
                                   !!v.original ||
                                   (published && String(v.vid ?? '').endsWith('-base')),
+                              ...(Array.isArray(v.snaps)
+                                  ? {
+                                        snaps: v.snaps
+                                            .filter((x) => x && Array.isArray(x.lines))
+                                            .map((x) => ({
+                                                at: String(x.at ?? ''),
+                                                t: Number(x.t) || 0,
+                                                title: String(x.title ?? ''),
+                                                lines: x.lines.map(String),
+                                            }))
+                                            .slice(0, SNAP_MAX),
+                                    }
+                                  : {}),
                           }));
                           let current = Math.min(
                               Math.max(0, Number(p.current) || 0),
@@ -3916,8 +4355,15 @@ function App() {
         const w = workRef.current;
         const sc = scrollerRef.current;
         // besides the export payload: which pieces are unfolded and where the page was scrolled to
+        const harvested = w ? harvestAll(w) : null;
+        // the page's own copy follows the editors, so the next save compares against this one and
+        // snapshots (past selves) capture what a piece said before each round of edits
+        if (w && harvested && harvested.some((x, i) => x !== w[i])) {
+            workRef.current = harvested;
+            setWork(harvested);
+        }
         const payload = {
-            ...makePayload(w ? harvestAll(w) : null),
+            ...makePayload(harvested),
             mode,
             open,
             view,
@@ -4166,6 +4612,7 @@ function App() {
                                             onLoadVersion: loadVersion,
                                             onDuplicate: duplicateVersion,
                                             onRemove: removeDraft,
+                                            onRestore: restoreSnap,
                                         },
                                         wp.id,
                                     ),
@@ -4176,6 +4623,7 @@ function App() {
                 className: 'controls',
                 'aria-label': 'page controls',
                 children: [
+                    jsxRuntimeExports.jsx(SearchControl, { items: searchItems, onGo: goToHit }),
                     !onCover &&
                         jsxRuntimeExports.jsxs(jsxRuntimeExports.Fragment, {
                             children: [

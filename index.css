@@ -1186,6 +1186,9 @@ s.ov {
     align-items: flex-end;
     gap: 10px;
 }
+.sync-panel form .pin + .box-submit {
+    margin-top: -5px;
+} /* one grid: the word's row sits one grid gap under the code */
 .sync-actions {
     display: flex;
     gap: 14px;
@@ -1212,12 +1215,13 @@ s.ov {
     cursor: text;
     z-index: 1;
 }
-.pin-boxes {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+/* the code and the action share one grid, four boxes wide: the code fills rows from the top, the word sits in the row(s) under it */
+.pin-boxes,
+.box-word {
+    display: grid;
+    grid-template-columns: repeat(4, 20px);
     gap: 5px;
-    max-width: calc(8 * 20px + 7 * 5px);
+    justify-content: end;
 }
 .pin-box {
     position: relative;
@@ -1301,6 +1305,203 @@ s.ov {
     line-height: 1.35;
     color: var(--dim);
     text-align: right;
+}
+
+/* ---- past selves: a piece's snapshots, folded under its text in draft mode ---- */
+.past {
+    margin-top: 28px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+    line-height: 1.42;
+    color: var(--dim);
+}
+.past button {
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    transition:
+        color 0.25s ease,
+        opacity 0.25s ease;
+}
+.past-toggle {
+    opacity: 0.6;
+}
+.past-toggle:hover,
+.past-toggle:focus-visible,
+.past.open .past-toggle {
+    opacity: 1;
+    color: var(--ink);
+    outline: none;
+}
+.past-count {
+    margin-left: 0.5em;
+    font-size: 0.85em;
+    opacity: 0.6;
+}
+.past-list {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    margin-top: 10px;
+    padding-left: 12px;
+    border-left: 1px solid var(--hairline);
+    animation: fx-rise 0.22s ease;
+}
+.past-date:hover,
+.past-date:focus-visible {
+    color: var(--ink);
+    outline: none;
+}
+.past-date.on {
+    color: #dc143c;
+}
+.past-actions {
+    display: flex;
+    gap: 18px;
+    margin-top: 12px;
+}
+.past-act:hover,
+.past-act:focus-visible {
+    color: var(--ink);
+    outline: none;
+}
+.past-act.strong {
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 4px;
+}
+/* peeking: the past self stands where the text was, a shade quieter, the live editor hidden but kept */
+.snap-hidden {
+    display: none;
+}
+.snap-peek {
+    opacity: 0.72;
+    animation: fx-rise 0.22s ease;
+}
+.snap-peek-title {
+    margin: 0 0 12px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+    color: #dc143c;
+}
+.snap-peek .story-text p {
+    white-space: pre-wrap;
+}
+
+/* ---- search: a field and its results, in the same panel style as the type shelf ---- */
+.search-panel {
+    align-items: stretch;
+    width: min(340px, calc(100vw - 90px));
+    max-height: min(70vh, 520px);
+}
+.search-field {
+    background: transparent;
+    color: var(--ink);
+    border: 0;
+    border-bottom: 1px solid var(--hairline);
+    font-family: var(--font-mono);
+    font-size: 16px;
+    padding: 2px 0 4px;
+    outline: none;
+    caret-color: #dc143c;
+}
+.search-field::placeholder {
+    color: var(--dim);
+    opacity: 0.6;
+}
+.search-field:focus {
+    border-bottom-color: var(--dim);
+}
+.search-results {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 8px;
+}
+.controls .search-hit {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    width: 100%;
+    height: auto;
+    padding: 6px 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    text-align: left;
+    cursor: pointer;
+    color: var(--dim);
+    font: inherit;
+}
+.search-hit-title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    opacity: 0.8;
+}
+.search-hit-line {
+    font-size: 14px;
+    line-height: 1.35;
+    color: var(--dim);
+}
+.search-hit mark {
+    background: none;
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-color: #dc143c;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+}
+.controls .search-hit.on .search-hit-line,
+.controls .search-hit:hover .search-hit-line {
+    color: var(--ink);
+}
+::highlight(search-hit) {
+    background-color: rgba(220, 20, 60, 0.28);
+    color: inherit;
+}
+.search-flash {
+    background: rgba(220, 20, 60, 0.18);
+    transition: background 0.6s ease;
+}
+
+/* submit as a word in boxes (join, next, change, make it mine) */
+.controls .face-choice.box-submit {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--dim);
+    cursor: pointer;
+}
+.box-word .box-gap {
+    width: 20px;
+    height: 26px;
+}
+.box-submit .pin-box {
+    font-size: 12px;
+    color: var(--dim);
+    border-color: var(--hairline);
+    transition:
+        color 0.2s ease,
+        border-color 0.2s ease;
+}
+.controls .face-choice.box-submit:not(:disabled):hover .pin-box,
+.controls .face-choice.box-submit:not(:disabled):focus-visible .pin-box {
+    color: var(--ink);
+    border-color: var(--ink);
+}
+.controls .face-choice.box-submit:not(:disabled) .pin-box {
+    color: var(--ink);
+    border-color: var(--dim);
+}
+.controls .face-choice.box-submit:disabled {
+    opacity: 0.4;
+    cursor: default;
 }
 
 /* standalone mirror: with no host header above the page, the top fade is the
