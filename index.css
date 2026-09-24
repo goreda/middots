@@ -1102,6 +1102,43 @@ s.ov {
     align-items: center;
     text-align: center;
 }
+/* the logo: on the horizon, left side, in the side-title style (mono, spaced, dim). The outer box carries the
+   folders' font size and line height, so its baseline is the first folder's baseline; the word sits on it. */
+.cover {
+    position: relative;
+}
+.logo {
+    position: absolute;
+    left: 0;
+    top: 0;
+    font-size: var(--fs);
+    line-height: var(--lh);
+    pointer-events: none;
+    white-space: pre;
+}
+.logo-word {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono);
+    line-height: 1;
+    letter-spacing: 0.04em;
+    color: var(--dim);
+}
+.logo-caret {
+    display: inline-block;
+    width: 1px;
+    height: 1.05em;
+    margin-left: 1px;
+    vertical-align: -0.18em;
+    background: var(--dim);
+}
+.logo-caret.rest {
+    animation: pin-caret 1.06s steps(1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+    .logo-caret {
+        display: none;
+    }
+}
 .cover-folders {
     display: flex;
     flex-direction: column;

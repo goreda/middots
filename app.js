@@ -1415,6 +1415,122 @@ function NameField({ initial, onDone }) {
         onBlur: () => finish(!!initial),
     });
 }
+/* ---- the logo: "middots", typed by a hand that hesitates ----
+   A behavioral logo on the main page's horizon, left side, in the side-title style. It is a small
+   script played in a loop: type the word, sometimes miss a key (a neighbour on the keyboard) or swap
+   two letters, notice a beat later, erase, retype; rest with a blinking caret; then have a second
+   thought - erase part or all of the word - and type again. Every interval is drawn fresh around a
+   human rhythm (quick runs inside the word, a breath before "dots", slower after a correction), so
+   the loop never repeats exactly and never ticks like a metronome. Reduced motion: the word, still. */
+const LOGO = 'middots';
+const NEAR = { m: 'nj', i: 'uok', d: 'sfe', o: 'ipl', t: 'ryg', s: 'adw' };
+const pick = (s) => s[Math.floor(Math.random() * s.length)];
+/* a pause around m ms with human spread: skewed right (log-normal), so most keys are quick and a few linger */
+const human = (m) =>
+    Math.round(m * Math.exp((Math.random() + Math.random() + Math.random() - 1.5) * 0.55));
+function logoTake(from) {
+    var _a;
+    const out = [];
+    let flow = 1; // slows after a slip, eases back as the hand trusts itself again
+    for (let i = from.length; i < LOGO.length; i++) {
+        const c = LOGO[i];
+        const beat = (i === 3 ? 380 : 120) * flow; // "mid" | "dots": a breath at the seam
+        const r = Math.random();
+        if (r < 0.1 && NEAR[c]) {
+            // a slip: a neighbouring key, maybe one more right letter, then notice, erase, retype
+            const run = Math.random() < 0.5 && i + 1 < LOGO.length ? 1 : 0;
+            out.push({ ch: pick(NEAR[c]), wait: human(beat) });
+            for (let k = 1; k <= run; k++) out.push({ ch: LOGO[i + k], wait: human(110) });
+            out[out.length - 1].wait += human(420); // the beat of noticing
+            for (let k = 0; k <= run; k++) out.push({ back: true, wait: human(75) });
+            out[out.length - 1].wait += human(140);
+            flow = 1.6;
+        } else if (r < 0.14 && i + 1 < LOGO.length && LOGO[i + 1] !== c) {
+            // a swap: two letters in the wrong order
+            out.push(
+                { ch: LOGO[i + 1], wait: human(beat) },
+                { ch: c, wait: human(90) + human(460) },
+            );
+            out.push({ back: true, wait: human(75) }, { back: true, wait: human(75) + human(160) });
+            flow = 1.6;
+        } else {
+            out.push({ ch: c, wait: 0 });
+            flow = Math.max(1, flow * 0.8);
+        }
+        if (out[out.length - 1].back) {
+            out.push({ ch: c, wait: 0 });
+        }
+        (_a = out[out.length - 1]).wait ||
+            (_a.wait = human(i === LOGO.length - 1 ? 200 : 115 * flow));
+    }
+    return out;
+}
+/* the second thought after a rest: how much of the word to take back */
+function logoDoubt() {
+    const r = Math.random();
+    return r < 0.45
+        ? 4 /* take back "dots", keep "mid" */
+        : r < 0.75
+          ? LOGO.length /* all of it */
+          : r < 0.9
+            ? 1
+            : 2;
+}
+function Logo() {
+    const [text, setText] = reactExports.useState(() =>
+        matchMedia('(prefers-reduced-motion: reduce)').matches ? LOGO : '',
+    );
+    const [typing, setTyping] = reactExports.useState(false); // the caret holds solid while keys fall, blinks at rest
+    reactExports.useEffect(() => {
+        if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        let t;
+        let cur = '';
+        const play = (strokes, then) => {
+            const step = (k) => {
+                if (k >= strokes.length) return then();
+                const s = strokes[k];
+                cur = s.back ? cur.slice(0, -1) : cur + s.ch;
+                setText(cur);
+                t = window.setTimeout(() => step(k + 1), s.wait);
+            };
+            setTyping(true);
+            step(0);
+        };
+        const cycle = () =>
+            play(logoTake(cur), () => {
+                // at rest: the whole word, a blinking caret, for a long while
+                setTyping(false);
+                t = window.setTimeout(
+                    () => {
+                        const n = logoDoubt();
+                        const erase = Array.from({ length: n }, (_, k) => ({
+                            back: true,
+                            wait: human(k === n - 1 ? 520 : 70),
+                        }));
+                        play(erase, cycle);
+                    },
+                    9000 + Math.random() * 9000,
+                );
+            });
+        t = window.setTimeout(cycle, 700);
+        return () => window.clearTimeout(t);
+    }, []);
+    return jsxRuntimeExports.jsx('div', {
+        className: 'logo',
+        'aria-label': LOGO,
+        role: 'img',
+        children: jsxRuntimeExports.jsxs('span', {
+            className: 'logo-word',
+            'aria-hidden': 'true',
+            children: [
+                text,
+                jsxRuntimeExports.jsx('span', {
+                    className: typing ? 'logo-caret' : 'logo-caret rest',
+                }),
+            ],
+        }),
+    });
+}
 function Cover({ folders, count, onOpen, onCreate, onRename }) {
     const [naming, setNaming] = reactExports.useState(false); // the + is a name field
     const [editing, setEditing] = reactExports.useState(null); // a folder being renamed
@@ -1431,6 +1547,7 @@ function Cover({ folders, count, onOpen, onCreate, onRename }) {
     return jsxRuntimeExports.jsxs('div', {
         className: 'cover',
         children: [
+            jsxRuntimeExports.jsx(Logo, {}),
             jsxRuntimeExports.jsx('nav', {
                 className: 'cover-folders',
                 'aria-label': 'folders',
