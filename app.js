@@ -847,6 +847,258 @@ const UPLOADED = [];
 const faceBySlug = (slug) =>
     FACES.find((f) => f.slug === slug) ?? UPLOADED.find((f) => f.slug === slug);
 
+const scriptRel = (function detectScriptRel() {
+    const relList = typeof document !== 'undefined' && document.createElement('link').relList;
+    return relList && relList.supports && relList.supports('modulepreload')
+        ? 'modulepreload'
+        : 'preload';
+})();
+const assetsURL = function (dep, importerUrl) {
+    return new URL(dep, importerUrl).href;
+};
+const seen = {};
+const __vitePreload = function preload(baseModule, deps, importerUrl) {
+    let promise = Promise.resolve();
+    if (true && deps && deps.length > 0) {
+        const links = document.getElementsByTagName('link');
+        const cspNonceMeta = document.querySelector('meta[property=csp-nonce]');
+        const cspNonce = cspNonceMeta?.nonce || cspNonceMeta?.getAttribute('nonce');
+        promise = Promise.allSettled(
+            deps.map((dep) => {
+                dep = assetsURL(dep, importerUrl);
+                if (dep in seen) return;
+                seen[dep] = true;
+                const isCss = dep.endsWith('.css');
+                const cssSelector = isCss ? '[rel="stylesheet"]' : '';
+                const isBaseRelative = !!importerUrl;
+                if (isBaseRelative) {
+                    for (let i = links.length - 1; i >= 0; i--) {
+                        const link2 = links[i];
+                        if (link2.href === dep && (!isCss || link2.rel === 'stylesheet')) {
+                            return;
+                        }
+                    }
+                } else if (document.querySelector(`link[href="${dep}"]${cssSelector}`)) {
+                    return;
+                }
+                const link = document.createElement('link');
+                link.rel = isCss ? 'stylesheet' : scriptRel;
+                if (!isCss) {
+                    link.as = 'script';
+                }
+                link.crossOrigin = '';
+                link.href = dep;
+                if (cspNonce) {
+                    link.setAttribute('nonce', cspNonce);
+                }
+                document.head.appendChild(link);
+                if (isCss) {
+                    return new Promise((res, rej) => {
+                        link.addEventListener('load', res);
+                        link.addEventListener('error', () =>
+                            rej(new Error(`Unable to preload CSS for ${dep}`)),
+                        );
+                    });
+                }
+            }),
+        );
+    }
+    function handlePreloadError(err) {
+        const e = new Event('vite:preloadError', {
+            cancelable: true,
+        });
+        e.payload = err;
+        window.dispatchEvent(e);
+        if (!e.defaultPrevented) {
+            throw err;
+        }
+    }
+    return promise.then((res) => {
+        for (const item of res || []) {
+            if (item.status !== 'rejected') continue;
+            handlePreloadError(item.reason);
+        }
+        return baseModule().catch(handlePreloadError);
+    });
+};
+
+/* the registered axes have fixed meanings; a font may still name them itself */
+const REGISTERED = {
+    wght: 'weight',
+    wdth: 'width',
+    slnt: 'slant',
+    ital: 'italic',
+    opsz: 'optical size',
+};
+const tagAt = (v, at) =>
+    String.fromCharCode(v.getUint8(at), v.getUint8(at + 1), v.getUint8(at + 2), v.getUint8(at + 3));
+/* the table directory of a plain sfnt (ttf/otf) starting at `base` */
+function sfntTables(v, base) {
+    const t = new Map();
+    const n = v.getUint16(base + 4);
+    for (let i = 0; i < n; i++) {
+        const r = base + 12 + i * 16;
+        const off = v.getUint32(r + 8),
+            len = v.getUint32(r + 12);
+        t.set(tagAt(v, r), async () => new DataView(v.buffer, v.byteOffset + off, len));
+    }
+    return t;
+}
+async function inflate(bytes) {
+    const stream = new Blob([bytes.slice()])
+        .stream()
+        .pipeThrough(new DecompressionStream('deflate'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+/* woff 1: a 44-byte header, then 20-byte entries; a table is compressed when its stored length is shorter */
+function woffTables(v) {
+    const t = new Map();
+    const n = v.getUint16(12);
+    for (let i = 0; i < n; i++) {
+        const r = 44 + i * 20;
+        const off = v.getUint32(r + 4),
+            comp = v.getUint32(r + 8),
+            orig = v.getUint32(r + 12);
+        t.set(tagAt(v, r), async () => {
+            const raw = new Uint8Array(v.buffer, v.byteOffset + off, comp);
+            if (comp >= orig) return new DataView(raw.buffer, raw.byteOffset, orig);
+            const out = await inflate(raw);
+            return new DataView(out.buffer);
+        });
+    }
+    return t;
+}
+/* woff2's short table codes: a 6-bit index into this list, or 63 for a tag spelled out */
+const WOFF2_TAGS = (
+    'cmap head hhea hmtx maxp name OS/2 post cvt  fpgm glyf loca prep CFF  VORG EBDT EBLC gasp hdmx kern LTSH PCLT VDMX vhea vmtx BASE GDEF GPOS GSUB ' +
+    'EBSC JSTF MATH CBDT CBLC COLR CPAL SVG  sbix acnt avar bdat bloc bsln cvar fdsc feat fmtx fvar gvar hsty just lcar mort morx opbd prop trak Zapf Silf Glat Gloc Feat Sill'
+)
+    .match(/.{4}\s?/g)
+    .map((s) => s.slice(0, 4));
+/* woff 2: the directory is variable-length; every table then sits, in directory order, in one brotli stream */
+function woff2Tables(v) {
+    const t = new Map();
+    if (tagAt(v, 4) === 'ttcf') return t; // collections: rare as uploads, not read (the font still works)
+    const n = v.getUint16(12);
+    const compressedSize = v.getUint32(20);
+    let p = 48;
+    const base128 = () => {
+        let x = 0;
+        for (let i = 0; i < 5; i++) {
+            const b = v.getUint8(p++);
+            x = x * 128 + (b & 0x7f);
+            if (!(b & 0x80)) return x;
+        }
+        throw new Error('bad woff2 number');
+    };
+    const entries = [];
+    let at = 0;
+    for (let i = 0; i < n; i++) {
+        const flags = v.getUint8(p++);
+        const tag = (flags & 0x3f) === 63 ? tagAt(v, (p += 4) - 4) : WOFF2_TAGS[flags & 0x3f];
+        const version = (flags >> 6) & 3;
+        const orig = base128();
+        // glyf and loca are transformed unless version 3; every other table only when its version is not 0
+        const transformed = tag === 'glyf' || tag === 'loca' ? version !== 3 : version !== 0;
+        const len = transformed ? base128() : orig;
+        entries.push({ tag, at, len });
+        at += len;
+    }
+    const start = p;
+    let whole = null; // decoded once, on the first table asked for
+    const all = () =>
+        whole ??
+        (whole = __vitePreload(
+            async () => {
+                const { brotliDecompress } = await import('./brotli.js');
+                return { brotliDecompress };
+            },
+            true ? [] : void 0,
+            import.meta.url,
+        ).then(({ brotliDecompress }) =>
+            brotliDecompress(new Uint8Array(v.buffer, v.byteOffset + start, compressedSize)),
+        ));
+    for (const e of entries)
+        t.set(e.tag, async () => {
+            const b = await all();
+            return new DataView(b.buffer, b.byteOffset + e.at, e.len);
+        });
+    return t;
+}
+/* a name from the 'name' table: Windows English first, then any Windows or Unicode entry, then Mac Roman */
+function nameOf(name, id) {
+    if (!name) return '';
+    const count = name.getUint16(2),
+        strings = name.getUint16(4);
+    let best = '',
+        rank = 0;
+    for (let i = 0; i < count; i++) {
+        const r = 6 + i * 12;
+        if (name.getUint16(r + 6) !== id) continue;
+        const platform = name.getUint16(r),
+            lang = name.getUint16(r + 4);
+        const len = name.getUint16(r + 8),
+            off = strings + name.getUint16(r + 10);
+        const wide = platform === 3 || platform === 0;
+        const score = platform === 3 && lang === 0x409 ? 3 : wide ? 2 : platform === 1 ? 1 : 0;
+        if (score <= rank) continue;
+        let s = '';
+        if (wide)
+            for (let k = 0; k + 1 < len; k += 2) s += String.fromCharCode(name.getUint16(off + k));
+        else for (let k = 0; k < len; k++) s += String.fromCharCode(name.getUint8(off + k));
+        best = s;
+        rank = score;
+    }
+    return best.trim();
+}
+/* the axes of a font file, [] for a static or unreadable one */
+async function readAxes(data) {
+    try {
+        const v = new DataView(data);
+        const sig = tagAt(v, 0);
+        const tables =
+            sig === 'wOFF'
+                ? woffTables(v)
+                : sig === 'wOF2'
+                  ? woff2Tables(v)
+                  : sig === 'ttcf'
+                    ? sfntTables(v, v.getUint32(12))
+                    : sfntTables(v, 0);
+        const fvar = await tables.get('fvar')?.();
+        if (!fvar) return [];
+        const name = (await tables.get('name')?.()) ?? null;
+        const first = fvar.getUint16(4),
+            count = fvar.getUint16(8),
+            size = fvar.getUint16(10);
+        const fixed = (at) => Math.round((fvar.getInt32(at) / 65536) * 1000) / 1000;
+        const axes = [];
+        for (let i = 0; i < count; i++) {
+            const r = first + i * size;
+            const tag = tagAt(fvar, r);
+            const hidden = fvar.getUint16(r + 16) & 1; // the designer asked for this axis not to be offered
+            const min = fixed(r + 4),
+                def = fixed(r + 8),
+                max = fixed(r + 12);
+            if (hidden || !(max > min)) continue;
+            const own = nameOf(name, fvar.getUint16(r + 18));
+            axes.push({ tag, name: (own || REGISTERED[tag] || tag).toLowerCase(), min, def, max });
+        }
+        return axes;
+    } catch {
+        return [];
+    }
+}
+/* the CSS font-variation-settings for a face at these values ('normal' when it has no axes) */
+function variationSettings(axes, values) {
+    if (!axes?.length) return 'normal';
+    return axes.map((a) => `'${a.tag}' ${values?.[a.tag] ?? a.def}`).join(', ');
+}
+/* a sensible knob step: whole numbers on wide axes, finer on narrow ones (0-1 flags, slant) */
+function stepFor(a) {
+    const span = a.max - a.min;
+    return span >= 50 ? 1 : span >= 5 ? 0.1 : 0.01;
+}
+
 /*
  * sync - the page's side of the sync service (service/src/worker.ts in the repo).
  *
@@ -1094,6 +1346,7 @@ function slugFor(fileName) {
 }
 /* hand a font to the font engine and put it on the first shelf; throws when it is not a usable font */
 async function register(slug, name, source, shared) {
+    const axes = await readAxes(source); // a variable font brings knobs to the panel; a static one none (read first: the font engine may take the bytes)
     const ff = new FontFace(slug, source);
     await ff.load();
     document.fonts.add(ff);
@@ -1104,6 +1357,7 @@ async function register(slug, name, source, shared) {
         kind: 'serif',
         uploaded: true,
         shared,
+        ...(axes.length ? { axes } : {}),
     };
     const at = UPLOADED.findIndex((f) => f.slug === slug);
     if (at >= 0) UPLOADED.splice(at, 1, face);
@@ -1225,6 +1479,311 @@ function forgetAllFonts() {
             res();
         }
     });
+}
+
+/*
+ * export.ts - the pieces on the page, out to a file: pdf, plain text, or a Word document.
+ *
+ * What goes out
+ *   The pieces in the current folder, as they stand on the page right now (reading or draft mode):
+ *   the unfolded ones if any are open, otherwise the whole folder, in page order. Everything is read
+ *   from the rendered page (collect), so an export always matches what the reader sees - the draft's
+ *   current version, the chosen faces and sizes, the middots, struck runs, indents.
+ *
+ * How the design travels
+ *   pdf   the page prints itself: the pieces are cloned into a print sheet that uses the same CSS and
+ *         the same loaded faces, laid out for paper (black on white). The browser's print dialog
+ *         saves it as a pdf, with the real fonts embedded and the text selectable.
+ *   docx  a Word file written by hand (OOXML in a stored zip, no library): the text face, title face,
+ *         point sizes, line spacing and letter spacing are read from the page and set as Word styles;
+ *         bold, italic, underline, strike and tabs carry as run formatting. Word needs the faces
+ *         installed to show them; otherwise it falls back.
+ *   txt   the words only: title, date, paragraphs, and the "· ·" endmark between pieces.
+ *
+ * Saving
+ *   A normal page (the mirror) downloads directly. The Instinct viewer's sandbox forbids downloads, so
+ *   there the file opens in a helper tab as a data: link to click (see saveBytes).
+ */
+function runsOf(p) {
+    const out = [];
+    const walk = (n, f) => {
+        if (n.nodeType === Node.TEXT_NODE) {
+            if (n.textContent) out.push({ text: n.textContent, ...f });
+            return;
+        }
+        if (!(n instanceof HTMLElement)) return;
+        if (n.tagName === 'BR') {
+            out.push({ text: '\n', ...f });
+            return;
+        }
+        const t = n.tagName;
+        const next = {
+            ...f,
+            b: f.b || t === 'B' || t === 'STRONG',
+            i: f.i || t === 'I' || t === 'EM',
+            u: f.u || t === 'U',
+            s: f.s || t === 'S' || t === 'DEL',
+        };
+        n.childNodes.forEach((c) => walk(c, next));
+    };
+    p.childNodes.forEach((c) => walk(c, {}));
+    return out;
+}
+/* the pieces to export: unfolded ones if any, else all of them, from the page as rendered */
+function collect() {
+    const all = [...document.querySelectorAll('section.story')];
+    const open = all.filter((s) => s.classList.contains('open'));
+    return (open.length ? open : all).map((s) => {
+        const when =
+            s.querySelector('.story-when.version.current') ?? s.querySelector('.story-when');
+        const text = s.querySelector('.story-text');
+        return {
+            title: (s.querySelector('.story-title')?.textContent ?? '').trim(),
+            when: (when?.textContent ?? '').trim(),
+            paras: text
+                ? [...text.children]
+                      .filter((c) => c.tagName === 'P' || c.tagName === 'DIV')
+                      .map((p) => ({ runs: runsOf(p) }))
+                : [],
+            note: (s.querySelector('.story-note')?.textContent ?? '').trim(),
+        };
+    });
+}
+function look() {
+    const px2pt = (px) => (parseFloat(px) || 16) * 0.75;
+    const first = (fam) =>
+        fam
+            .split(',')[0]
+            .trim()
+            .replace(/^["']|["']$/g, '');
+    const text = document.querySelector('.story-text p') ?? document.body;
+    const title = document.querySelector('.story-title') ?? document.body;
+    const t = getComputedStyle(text);
+    const h = getComputedStyle(title);
+    const lh = parseFloat(t.lineHeight) / (parseFloat(t.fontSize) || 16);
+    return {
+        body: first(t.fontFamily),
+        title: first(h.fontFamily),
+        bodyPt: Math.round(px2pt(t.fontSize) * 2) / 2,
+        titlePt: Math.round(px2pt(h.fontSize) * 2) / 2,
+        line: Number.isFinite(lh) ? lh : 1.5,
+        titleCaps: h.textTransform === 'uppercase',
+        titleTrack: (parseFloat(h.letterSpacing) || 0) * 0.75, // pt
+    };
+}
+/* ---- 2. the formats ---- */
+const ENDMARK = '\u00b7 \u00b7';
+const plain = (p) =>
+    p.runs
+        .filter((r) => !r.s)
+        .map((r) => r.text)
+        .join('');
+function toTxt(docs) {
+    return (
+        docs
+            .map((d) =>
+                [
+                    d.title,
+                    d.when,
+                    '',
+                    ...d.paras.map(plain).flatMap((l, i, a) => (i < a.length - 1 ? [l, ''] : [l])),
+                    ...(d.note ? ['', d.note] : []),
+                    '',
+                    ENDMARK,
+                ].join('\n'),
+            )
+            .join('\n\n\n') + '\n'
+    );
+}
+const xml = (t) =>
+    t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+/* one Word run: tabs and line breaks become their own elements */
+function wRun(r) {
+    const pr =
+        (r.b ? '<w:b/>' : '') +
+        (r.i ? '<w:i/>' : '') +
+        (r.u ? '<w:u w:val="single"/>' : '') +
+        (r.s ? '<w:strike/>' : '');
+    const parts = r.text.split(/(\t|\n)/).filter((x) => x !== '');
+    const body = parts
+        .map((x) =>
+            x === '\t'
+                ? '<w:tab/>'
+                : x === '\n'
+                  ? '<w:br/>'
+                  : `<w:t xml:space="preserve">${xml(x)}</w:t>`,
+        )
+        .join('');
+    return `<w:r>${pr ? `<w:rPr>${pr}</w:rPr>` : ''}${body}</w:r>`;
+}
+const wPara = (style, inner, extra = '') =>
+    `<w:p><w:pPr><w:pStyle w:val="${style}"/>${extra}</w:pPr>${inner}</w:p>`;
+function toDocx(docs) {
+    const L = look();
+    const line = Math.round(L.line * 240);
+    const font = (f) =>
+        `<w:rFonts w:ascii="${xml(f)}" w:hAnsi="${xml(f)}" w:cs="${xml(f)}" w:eastAsia="${xml(f)}"/>`;
+    const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:docDefaults><w:rPrDefault><w:rPr>${font(L.body)}<w:sz w:val="${L.bodyPt * 2}"/></w:rPr></w:rPrDefault>
+<w:pPrDefault><w:pPr><w:spacing w:after="0" w:line="${line}" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>
+<w:style w:type="paragraph" w:default="1" w:styleId="Text"><w:name w:val="Text"/><w:pPr><w:spacing w:after="${Math.round(L.bodyPt * 20 * L.line * 0.5)}"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="PieceTitle"><w:name w:val="Piece title"/><w:pPr><w:keepNext/><w:spacing w:before="0" w:after="40"/></w:pPr><w:rPr>${font(L.title)}<w:sz w:val="${L.titlePt * 2}"/>${L.titleCaps ? '<w:caps/>' : ''}<w:spacing w:val="${Math.round(L.titleTrack * 20)}"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="PieceDate"><w:name w:val="Piece date"/><w:pPr><w:keepNext/><w:spacing w:after="${Math.round(L.bodyPt * 20 * L.line)}"/></w:pPr><w:rPr>${font(L.title)}<w:sz w:val="${Math.max(12, Math.round(L.titlePt * 2 * 0.85))}"/><w:color w:val="8A8A8A"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Note"><w:name w:val="Note"/><w:pPr><w:spacing w:before="200"/></w:pPr><w:rPr><w:i/><w:color w:val="8A8A8A"/></w:rPr></w:style>
+<w:style w:type="paragraph" w:styleId="Endmark"><w:name w:val="Endmark"/><w:pPr><w:jc w:val="center"/><w:spacing w:before="240" w:after="240"/></w:pPr><w:rPr><w:color w:val="8A8A8A"/></w:rPr></w:style>
+</w:styles>`;
+    const body = docs
+        .map(
+            (d, k) =>
+                wPara('PieceTitle', wRun({ text: d.title }), k > 0 ? '<w:pageBreakBefore/>' : '') +
+                wPara('PieceDate', wRun({ text: d.when })) +
+                d.paras.map((p) => wPara('Text', p.runs.map(wRun).join(''))).join('') +
+                (d.note ? wPara('Note', wRun({ text: d.note })) : '') +
+                wPara('Endmark', wRun({ text: ENDMARK })),
+        )
+        .join('');
+    const document_ = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1701" w:right="1701" w:bottom="1701" w:left="1701" w:header="709" w:footer="709" w:gutter="0"/></w:sectPr></w:body></w:document>`;
+    const files = [
+        [
+            '[Content_Types].xml',
+            `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>`,
+        ],
+        [
+            '_rels/.rels',
+            `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`,
+        ],
+        [
+            'word/_rels/document.xml.rels',
+            `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
+        ],
+        ['word/document.xml', document_],
+        ['word/styles.xml', styles],
+    ];
+    return zipStore(files.map(([n, t]) => [n, new TextEncoder().encode(t)]));
+}
+/* a zip with every file stored (no compression): local headers, then the central directory */
+const CRC = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+        t[n] = c >>> 0;
+    }
+    return t;
+})();
+const crc32 = (b) => {
+    let c = 0xffffffff;
+    for (let i = 0; i < b.length; i++) c = CRC[(c ^ b[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+};
+function zipStore(files) {
+    const chunks = [];
+    const central = [];
+    let offset = 0;
+    for (const [name, data] of files) {
+        const nm = new TextEncoder().encode(name);
+        const crc = crc32(data);
+        const head = new DataView(new ArrayBuffer(30));
+        head.setUint32(0, 0x04034b50, true);
+        head.setUint16(4, 20, true);
+        head.setUint16(8, 0, true);
+        head.setUint32(14, crc, true);
+        head.setUint32(18, data.length, true);
+        head.setUint32(22, data.length, true);
+        head.setUint16(26, nm.length, true);
+        chunks.push(new Uint8Array(head.buffer), nm, data);
+        const cen = new DataView(new ArrayBuffer(46));
+        cen.setUint32(0, 0x02014b50, true);
+        cen.setUint16(4, 20, true);
+        cen.setUint16(6, 20, true);
+        cen.setUint32(16, crc, true);
+        cen.setUint32(20, data.length, true);
+        cen.setUint32(24, data.length, true);
+        cen.setUint16(28, nm.length, true);
+        cen.setUint32(42, offset, true);
+        central.push(new Uint8Array(cen.buffer), nm);
+        offset += 30 + nm.length + data.length;
+    }
+    const size = central.reduce((n, c) => n + c.length, 0);
+    const end = new DataView(new ArrayBuffer(22));
+    end.setUint32(0, 0x06054b50, true);
+    end.setUint16(8, files.length, true);
+    end.setUint16(10, files.length, true);
+    end.setUint32(12, size, true);
+    end.setUint32(16, offset, true);
+    const all = [...chunks, ...central, new Uint8Array(end.buffer)];
+    const out = new Uint8Array(all.reduce((n, c) => n + c.length, 0));
+    let p = 0;
+    for (const c of all) {
+        out.set(c, p);
+        p += c.length;
+    }
+    return out;
+}
+/* pdf: clone the pieces into a print sheet (same CSS, same faces), print, then take the sheet away */
+function printPdf(title) {
+    const all = [...document.querySelectorAll('section.story')];
+    const open = all.filter((s) => s.classList.contains('open'));
+    const sheet = document.createElement('div');
+    sheet.className = 'print-sheet';
+    for (const s of open.length ? open : all) {
+        const c = s.cloneNode(true);
+        c.classList.add('open');
+        c.querySelectorAll(
+            '.story-audio, .vrow:not(.current), .vrow.add, button:not(.story-head-main)',
+        ).forEach((e) => e.remove()); // no controls on paper
+        c.querySelectorAll('[contenteditable]').forEach((e) =>
+            e.removeAttribute('contenteditable'),
+        );
+        c.removeAttribute('id');
+        sheet.appendChild(c);
+    }
+    document.body.appendChild(sheet);
+    document.documentElement.classList.add('printing');
+    const was = document.title;
+    document.title = title; // the browser offers it as the pdf's file name
+    const done = () => {
+        sheet.remove();
+        document.documentElement.classList.remove('printing');
+        document.title = was;
+    };
+    // the sheet leaves after printing; where a browser sends no afterprint, the next touch or key takes it
+    window.addEventListener('afterprint', done, { once: true });
+    const later = () => {
+        window.setTimeout(() => {
+            if (sheet.isConnected) done();
+        }, 0);
+    };
+    window.setTimeout(() => {
+        window.addEventListener('pointerdown', later, { once: true });
+        window.addEventListener('keydown', later, { once: true });
+    }, 400);
+    try {
+        window.print();
+    } catch {
+        done();
+        return false;
+    }
+    return true;
+}
+/* ---- 3. saving ---- */
+function saveBytes(name, bytes, mime) {
+    {
+        const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+        return true;
+    }
 }
 
 /* ==========================================================================
@@ -1983,21 +2542,27 @@ function ControlGroup({ id, label, icon, open, setOpen, children }) {
    (or double-tap) puts it back. Stored as a shift from the default, so it fits phone and desktop alike. */
 const HZ_RANGE = [-60, 280];
 /* the lowest the horizon may go: where the tallest folded stack (a folder in draft mode: search, home,
-   draft, five families, sync) still ends above the bottom edge. Measured from the stack's top now, less
+   draft, six families, sync) still ends above the bottom edge. Measured from the stack's top now, less
    the current shift, so it holds on every page, window size and frame. */
-const STACK_ROWS = 9;
+const STACK_ROWS = 10;
 function hzMax() {
     const el = document.querySelector('.controls');
     if (!el) return HZ_RANGE[1];
     const now =
         parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--hz')) || 0;
     const base = el.getBoundingClientRect().top - now; // the stack's top with the horizon at its default
-    return Math.max(
-        0,
-        Math.min(HZ_RANGE[1], Math.floor(window.innerHeight - 14 - (STACK_ROWS * 44 - 10) - base)),
-    );
+    // on a short window this is above the default line (negative): the horizon is lifted until the stack
+    // fits - past the usual -60 if it must, but the stack never starts closer than 47px to the top
+    // (the handle sits 27px above the stack, and keeps 20px of room above itself)
+    const fit = Math.floor(window.innerHeight - 14 - (STACK_ROWS * 44 - 10) - base);
+    return Math.max(Math.ceil(47 - base), Math.min(HZ_RANGE[1], fit));
 }
-const clampHz = (v) => Math.round(Math.min(hzMax(), Math.max(HZ_RANGE[0], v)));
+/* the highest the horizon may go: the usual -60, or higher when a short window needs it (hzMax) */
+const hzMin = () => Math.min(HZ_RANGE[0], hzMax());
+// the layout pass (tests) asks the page itself for this limit, so the test never keeps its own copy of it
+window.__hzMax = hzMax;
+const clampHz = (v) => Math.round(Math.min(hzMax(), Math.max(hzMin(), v)));
+window.__hzMin = hzMin;
 function HorizonControl({ value, onSet }) {
     const drag = reactExports.useRef(null);
     const [active, setActive] = reactExports.useState(false);
@@ -3136,13 +3701,95 @@ function placePanel(list, widget) {
     list.style.top = `${top}px`;
     list.style.right = `${window.innerWidth - w.left + 10}px`;
 }
+/*
+ * AxisKnobs - the knobs of a variable face (axes.ts), shown under its name in the face list.
+ * One thin line per axis, named in the list's own words (weight, width, softness...), with the value
+ * beside it. Turning a knob changes the text live without re-rendering the page (onLive sets the CSS
+ * variable directly); letting go keeps the value (onDone), which saves and syncs it with the settings.
+ * Double-click (or double-tap) a knob's name to put that axis back to the font's default.
+ */
+function AxisKnobs({ face, axes, values, onLive, onDone }) {
+    const [now, setNow] = reactExports.useState(values);
+    const nowRef = reactExports.useRef(values);
+    const valuesKey = JSON.stringify(values); // compared by content: a parent render must not undo a knob mid-turn
+    reactExports.useEffect(() => {
+        setNow(values);
+        nowRef.current = values;
+    }, [face.slug, valuesKey]);
+    const turn = (tag, v) => {
+        const next = { ...nowRef.current, [tag]: v };
+        nowRef.current = next;
+        setNow(next);
+        onLive(next);
+    };
+    const done = () => onDone(nowRef.current);
+    const shown = (a, v) =>
+        stepFor(a) >= 1 ? String(Math.round(v)) : String(Math.round(v * 100) / 100);
+    return jsxRuntimeExports.jsx('div', {
+        className: 'face-axes',
+        role: 'group',
+        'aria-label': `${face.name} axes`,
+        children: axes.map((a) => {
+            const v = now[a.tag] ?? a.def;
+            return jsxRuntimeExports.jsxs(
+                'label',
+                {
+                    className: 'face-axis',
+                    children: [
+                        jsxRuntimeExports.jsx('span', {
+                            className: 'face-axis-name',
+                            title: `${a.tag} ${a.min}\u2013${a.max}, double-click resets`,
+                            onDoubleClick: (e) => {
+                                e.preventDefault();
+                                turn(a.tag, a.def);
+                                onDone(nowRef.current);
+                            },
+                            children: a.name,
+                        }),
+                        jsxRuntimeExports.jsx('input', {
+                            type: 'range',
+                            min: a.min,
+                            max: a.max,
+                            step: stepFor(a),
+                            value: v,
+                            'aria-label': a.name,
+                            'aria-valuetext': `${a.name} ${shown(a, v)}`,
+                            onChange: (e) => turn(a.tag, Number(e.target.value)),
+                            onPointerUp: done,
+                            onKeyUp: done,
+                            onBlur: done,
+                        }),
+                        jsxRuntimeExports.jsx('span', {
+                            className: 'face-axis-value',
+                            children: shown(a, v),
+                        }),
+                    ],
+                },
+                a.tag,
+            );
+        }),
+    });
+}
 /* type shelf picker: click opens the whole shelf, each name set in its own face; hovering a name
    tastes it on the page, clicking keeps it, leaving puts back what was chosen */
 
 /* ---- type shelf picker ---------------------------------------------------
  * Opens the full shelf beside its button; hover previews, click keeps.
  */
-function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUpload, onRemove }) {
+function FacePicker({
+    slot,
+    value,
+    onPick,
+    onTaste,
+    open,
+    setOpen,
+    uploads,
+    onUpload,
+    onRemove,
+    axisValues,
+    onAxisLive,
+    onAxis,
+}) {
     const listRef = reactExports.useRef(null);
     const uploadRef = reactExports.useRef(null);
     const [uploadNote, setUploadNote] = reactExports.useState('');
@@ -3202,10 +3849,18 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUp
                                 e.target.value = '';
                                 if (!file) return;
                                 setUploadNote('');
-                                onUpload(file).catch(() =>
-                                    setUploadNote(
-                                        'that file isn\u2019t a font this browser can read',
-                                    ),
+                                // a variable font becomes this slot's face at once, so its knobs open right here
+                                onUpload(file).then(
+                                    (f) => {
+                                        if (f.axes) {
+                                            onPick(f.slug);
+                                            onTaste(null);
+                                        }
+                                    },
+                                    () =>
+                                        setUploadNote(
+                                            'that file isn\u2019t a font this browser can read',
+                                        ),
                                 );
                             },
                         }),
@@ -3216,30 +3871,49 @@ function FacePicker({ slot, value, onPick, onTaste, open, setOpen, uploads, onUp
                             }),
                         uploads.map((f) =>
                             jsxRuntimeExports.jsxs(
-                                'span',
+                                React.Fragment,
                                 {
-                                    className: 'face-own',
                                     children: [
-                                        jsxRuntimeExports.jsx('button', {
-                                            type: 'button',
-                                            className: 'face-remove',
-                                            'aria-label': `remove ${f.name}`,
-                                            onClick: () => onRemove(f.slug),
-                                            children: '\u00D7',
+                                        jsxRuntimeExports.jsxs('span', {
+                                            className: 'face-own',
+                                            children: [
+                                                jsxRuntimeExports.jsx('button', {
+                                                    type: 'button',
+                                                    className: 'face-remove',
+                                                    'aria-label': `remove ${f.name}`,
+                                                    onClick: () => onRemove(f.slug),
+                                                    children: '\u00D7',
+                                                }),
+                                                jsxRuntimeExports.jsx('button', {
+                                                    type: 'button',
+                                                    className: `face-choice${f.slug === value ? ' current' : ''}`,
+                                                    style: {
+                                                        fontFamily: f.family,
+                                                        fontVariationSettings: variationSettings(
+                                                            f.axes,
+                                                            axisValues[f.slug],
+                                                        ),
+                                                    },
+                                                    onMouseEnter: () => onTaste(f.slug),
+                                                    onFocus: () => onTaste(f.slug),
+                                                    onClick: () => {
+                                                        onPick(f.slug);
+                                                        onTaste(null);
+                                                        setOpen(false);
+                                                    },
+                                                    children: f.name,
+                                                }),
+                                            ],
                                         }),
-                                        jsxRuntimeExports.jsx('button', {
-                                            type: 'button',
-                                            className: `face-choice${f.slug === value ? ' current' : ''}`,
-                                            style: { fontFamily: f.family },
-                                            onMouseEnter: () => onTaste(f.slug),
-                                            onFocus: () => onTaste(f.slug),
-                                            onClick: () => {
-                                                onPick(f.slug);
-                                                onTaste(null);
-                                                setOpen(false);
-                                            },
-                                            children: f.name,
-                                        }),
+                                        f.slug === value &&
+                                            f.axes &&
+                                            jsxRuntimeExports.jsx(AxisKnobs, {
+                                                face: f,
+                                                axes: f.axes,
+                                                values: axisValues[f.slug] ?? {},
+                                                onLive: (v) => onAxisLive(f.slug, v),
+                                                onDone: (v) => onAxis(f.slug, v),
+                                            }),
                                     ],
                                 },
                                 f.slug,
@@ -4046,6 +4720,7 @@ function App() {
     const [faceOpen, setFaceOpen] = reactExports.useState(null);
     const [commit, setCommit] = reactExports.useState(false);
     const [uploads, setUploads] = reactExports.useState([]);
+    const [axisValues, setAxisValues] = reactExports.useState({}); // variable faces: slug -> axis tag -> value
     const soundPref = reactExports.useRef({ on: true, era: ERAS[2].id, commit: false });
     const platenRef = reactExports.useRef(false);
     platenRef.current = platen && mode === 'draft';
@@ -4067,7 +4742,7 @@ function App() {
     reactExports.useEffect(() => {
         document.documentElement.style.setProperty('--hz', `${hz}px`);
         // a saved or dragged horizon never goes below the lowest safe line for this window
-        if (hz > 0 && hz > hzMax()) {
+        if (hz > hzMax()) {
             setHz(clampHz(hz));
             return;
         }
@@ -4092,10 +4767,34 @@ function App() {
             );
             if (!f.shelf) document.documentElement.style.setProperty(prop, f.family);
             document.documentElement.dataset[slot === 'body' ? 'faceBody' : 'faceTitle'] = f.slug;
+            // a variable face is always drawn at its knobs' values ('normal' for every other face)
+            document.documentElement.style.setProperty(
+                slot === 'body' ? '--fvs-body' : '--fvs-mono',
+                variationSettings(f.axes, axisValues[f.slug]),
+            );
         };
         apply('body', taste?.slot === 'body' ? taste.slug : bodyFace);
         apply('title', taste?.slot === 'title' ? taste.slug : titleFace);
-    }, [bodyFace, titleFace, taste, uploads]); // uploads: a restored own font arrives after the first paint
+    }, [bodyFace, titleFace, taste, uploads, axisValues]); // uploads: a restored own font arrives after the first paint
+    /* a knob turning: set the face's variations straight on the page, in each slot that shows it (no React render) */
+    const axisLive = (slug, values) => {
+        const f = faceBySlug(slug);
+        if (!f) return;
+        const shownBody = taste?.slot === 'body' ? taste.slug : bodyFace;
+        const shownTitle = taste?.slot === 'title' ? taste.slug : titleFace;
+        if (shownBody === slug)
+            document.documentElement.style.setProperty(
+                '--fvs-body',
+                variationSettings(f.axes, values),
+            );
+        if (shownTitle === slug)
+            document.documentElement.style.setProperty(
+                '--fvs-mono',
+                variationSettings(f.axes, values),
+            );
+    };
+    /* a knob let go: keep the values (saved and synced with the settings) */
+    const axisKeep = (slug, values) => setAxisValues((prev) => ({ ...prev, [slug]: values }));
     // ghost controls: any deliberate activity wakes them, idle hides them
     reactExports.useEffect(() => {
         let timer;
@@ -4375,8 +5074,9 @@ function App() {
         setShelfRev((n) => n + 1);
     };
     const uploadFace = async (file) => {
-        await addFontFile(file);
+        const face = await addFontFile(file);
         setUploads([...UPLOADED]);
+        return face;
     };
     /* drop a font file anywhere on the page: it goes through the same path as upload (uploads.ts) and
        becomes the text face at once. Only font files are taken; anything else falls through untouched. */
@@ -4430,6 +5130,10 @@ function App() {
     }, []);
     const dropFace = (slug) => {
         void removeFont(slug).finally(() => setUploads([...UPLOADED]));
+        setAxisValues((prev) => {
+            const { [slug]: _gone, ...rest } = prev;
+            return rest;
+        });
         if (bodyFace === slug) setBodyFace('eb-garamond');
         if (titleFace === slug) setTitleFace('fragment-mono');
     };
@@ -4699,6 +5403,7 @@ function App() {
             commitment: commit,
             textFace: bodyFace,
             titleFace,
+            faceAxes: axisValues, // knob values of variable faces: slug -> axis tag -> value
         },
         pieces:
             harvested === null
@@ -4722,6 +5427,34 @@ function App() {
                       current,
                   })),
     });
+    /* export (export.ts): the pieces on the page, named after the folder and the day */
+    const exportAs = (kind) => {
+        setCtlOpen(null);
+        const folder =
+            liveFolders()
+                .map(named)
+                .find((f) => f.id === view)?.title ?? 'middots';
+        const d = new Date();
+        const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; // the reader's own day
+        const base = `${folder} ${day}`.replace(/[\\/:*?"<>|]+/g, '-');
+        if (kind === 'pdf') {
+            window.setTimeout(() => printPdf(base), 300);
+            return;
+        } // after the family folds away
+        const docs = collect();
+        if (kind === 'txt')
+            saveBytes(
+                `${base}.txt`,
+                new TextEncoder().encode(toTxt(docs)),
+                'text/plain;charset=utf-8',
+            );
+        else
+            saveBytes(
+                `${base}.docx`,
+                toDocx(docs),
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            );
+    };
     const doExport = () => {
         const w = workRef.current;
         if (!w) return;
@@ -4842,6 +5575,18 @@ function App() {
             )
                 setTitleFace(s.titleFace);
             if (typeof s.commitment === 'boolean') setCommit(s.commitment);
+            if (s.faceAxes && typeof s.faceAxes === 'object') {
+                // only numbers are taken back; a knob for an axis the font lacks is simply never read
+                const kept = {};
+                for (const [slug, vals] of Object.entries(s.faceAxes)) {
+                    if (!vals || typeof vals !== 'object') continue;
+                    const one = {};
+                    for (const [tag, v] of Object.entries(vals))
+                        if (typeof v === 'number' && Number.isFinite(v)) one[tag] = v;
+                    kept[slug] = one;
+                }
+                setAxisValues(kept);
+            }
             if (
                 typeof s.soundEra === 'string' &&
                 (s.soundEra === 'random' || ERAS.some((e) => e.id === s.soundEra))
@@ -4993,6 +5738,7 @@ function App() {
         commit,
         bodyFace,
         titleFace,
+        axisValues,
         work,
         mode,
         open,
@@ -5627,6 +6373,9 @@ function App() {
                                       children: [
                                           jsxRuntimeExports.jsx(FacePicker, {
                                               slot: 'body',
+                                              axisValues: axisValues,
+                                              onAxisLive: axisLive,
+                                              onAxis: axisKeep,
                                               uploads: uploads,
                                               onUpload: uploadFace,
                                               onRemove: dropFace,
@@ -5639,6 +6388,9 @@ function App() {
                                           }),
                                           jsxRuntimeExports.jsx(FacePicker, {
                                               slot: 'title',
+                                              axisValues: axisValues,
+                                              onAxisLive: axisLive,
+                                              onAxis: axisKeep,
                                               uploads: uploads,
                                               onUpload: uploadFace,
                                               onRemove: dropFace,
@@ -5858,6 +6610,67 @@ function App() {
                                                       }),
                                                   ],
                                               }),
+                                      ],
+                                  }),
+                                  jsxRuntimeExports.jsxs(ControlGroup, {
+                                      id: 'export',
+                                      label: 'export',
+                                      open: ctlOpen,
+                                      setOpen: setCtlOpen,
+                                      icon: jsxRuntimeExports.jsxs('svg', {
+                                          width: '14',
+                                          height: '14',
+                                          viewBox: '0 0 14 14',
+                                          'aria-hidden': 'true',
+                                          children: [
+                                              jsxRuntimeExports.jsx('path', {
+                                                  d: 'M7 9V2M4 4.8 7 1.8l3 3',
+                                                  fill: 'none',
+                                                  stroke: 'currentColor',
+                                                  strokeWidth: '1.1',
+                                              }),
+                                              jsxRuntimeExports.jsx('path', {
+                                                  d: 'M3 7.5v4h8v-4',
+                                                  fill: 'none',
+                                                  stroke: 'currentColor',
+                                                  strokeWidth: '1.1',
+                                              }),
+                                          ],
+                                      }),
+                                      children: [
+                                          jsxRuntimeExports.jsx('button', {
+                                              type: 'button',
+                                              'aria-label': 'export pdf',
+                                              'data-tip': 'pdf',
+                                              onClick: () => exportAs('pdf'),
+                                              children: jsxRuntimeExports.jsx('span', {
+                                                  className: 'ctl-glyph',
+                                                  'aria-hidden': 'true',
+                                                  children: 'pdf',
+                                              }),
+                                          }),
+                                          jsxRuntimeExports.jsx('button', {
+                                              type: 'button',
+                                              'aria-label': 'export word',
+                                              'data-tip': 'word',
+                                              onClick: () => exportAs('docx'),
+                                              children: jsxRuntimeExports.jsx('span', {
+                                                  className: 'ctl-glyph',
+                                                  'aria-hidden': 'true',
+                                                  children: 'doc',
+                                              }),
+                                          }),
+                                          jsxRuntimeExports.jsx('button', {
+                                              type: 'button',
+                                              'aria-label': 'export plain text',
+                                              'data-tip': 'plain text',
+                                              onClick: () => exportAs('txt'),
+                                              children: jsxRuntimeExports.jsx('span', {
+                                                  className: 'ctl-glyph',
+                                                  'aria-hidden': 'true',
+                                                  children: 'txt',
+                                              }),
+                                          }),
                                       ],
                                   }),
                               ],
