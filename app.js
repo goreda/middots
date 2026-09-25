@@ -1119,6 +1119,7 @@ function stepFor(a) {
 const TOKEN_KEY = 'middots-sync-token';
 const REV_KEY = 'middots-sync-rev';
 const PUSH_DELAY = 4000;
+const syncAvailable = () => true;
 function read(key) {
     try {
         return localStorage.getItem(key) ?? '';
@@ -2542,9 +2543,9 @@ function ControlGroup({ id, label, icon, open, setOpen, children }) {
    (or double-tap) puts it back. Stored as a shift from the default, so it fits phone and desktop alike. */
 const HZ_RANGE = [-60, 280];
 /* the lowest the horizon may go: where the tallest folded stack (a folder in draft mode: search, home,
-   draft, six families, sync) still ends above the bottom edge. Measured from the stack's top now, less
+   draft, six families; sync sits in the page family) still ends above the bottom edge. Measured from the stack's top now, less
    the current shift, so it holds on every page, window size and frame. */
-const STACK_ROWS = 10;
+const STACK_ROWS = 9;
 function hzMax() {
     const el = document.querySelector('.controls');
     if (!el) return HZ_RANGE[1];
@@ -6610,6 +6611,11 @@ function App() {
                                                       }),
                                                   ],
                                               }),
+                                          jsxRuntimeExports.jsx(SyncControl, {
+                                              onJoined: syncJoined,
+                                              onLeft: resetDevice,
+                                              onRekeyed: syncRekeyed,
+                                          }),
                                       ],
                                   }),
                                   jsxRuntimeExports.jsxs(ControlGroup, {
@@ -6675,11 +6681,13 @@ function App() {
                                   }),
                               ],
                           }),
-                    jsxRuntimeExports.jsx(SyncControl, {
-                        onJoined: syncJoined,
-                        onLeft: resetDevice,
-                        onRekeyed: syncRekeyed,
-                    }),
+                    onCover &&
+                        syncAvailable() &&
+                        jsxRuntimeExports.jsx(SyncControl, {
+                            onJoined: syncJoined,
+                            onLeft: resetDevice,
+                            onRekeyed: syncRekeyed,
+                        }),
                 ],
             }),
             jsxRuntimeExports.jsx('input', {
